@@ -176,8 +176,9 @@ parser.add_argument('--vflip', type=float, default=0.,
                     help='Vertical flip training aug probability')
 parser.add_argument('--color-jitter', type=float, default=0.4, metavar='PCT',
                     help='Color jitter factor (default: 0.4)')
-parser.add_argument('--aa', type=str, default=None, metavar='NAME',
-                    help='Use AutoAugment policy. "v0" or "original". (default: None)'),
+parser.add_argument('--aa', type=str, default='rand-m9-mstd0.5-inc1', metavar='NAME',
+                        help='Use AutoAugment policy. "v0" or "original". " + \
+                             "(default: rand-m9-mstd0.5-inc1)'),
 parser.add_argument('--aug-splits', type=int, default=0,
                     help='Number of augmentation splits (default: 0, valid: 0 or >=2)')
 parser.add_argument('--jsd', action='store_true', default=False,
@@ -216,6 +217,8 @@ parser.add_argument('--drop-path', type=float, default=None, metavar='PCT',
                     help='Drop path rate (default: None)')
 parser.add_argument('--drop-block', type=float, default=None, metavar='PCT',
                     help='Drop block rate (default: None)')
+parser.add_argument('--repeated-aug', action='store_true')
+parser.set_defaults(repeated_aug=True)
 
 # Batch norm parameters (only works with gen_efficientnet based models currently)
 parser.add_argument('--bn-tf', action='store_true', default=False,
@@ -280,6 +283,8 @@ parser.add_argument('--torchscript', dest='torchscript', action='store_true',
 parser.add_argument('--log-wandb', action='store_true', default=False,
                     help='log training and validation metrics to wandb')
 
+parser.add_argument('--pause', type=int, default=None,
+                    help='pause training at the epoch')
 
 def _parse_args():
     # Do we have a config file to parse?
@@ -301,14 +306,7 @@ def _parse_args():
 def main():
     setup_default_logging()
     args, args_text = _parse_args()
-    
-    if args.log_wandb:
-        if has_wandb:
-            wandb.init(project=args.experiment, config=args)
-        else: 
-            _logger.warning("You've requested to log metrics to wandb but package not found. "
-                            "Metrics not being logged to wandb, try `pip install wandb`")
-             
+
     args.prefetcher = not args.no_prefetcher
     args.distributed = False
     if 'WORLD_SIZE' in os.environ:
@@ -345,6 +343,13 @@ def main():
                         "Install NVIDA apex or upgrade to PyTorch 1.6")
 
     random_seed(args.seed, args.rank)
+
+    if args.log_wandb and args.local_rank == 0:
+        if has_wandb:
+            wandb.init(project="pytorch-image-models", name=args.experiment, config=args)
+        else:
+            _logger.warning("You've requested to log metrics to wandb but package not found. "
+                            "Metrics not being logged to wandb, try `pip install wandb`")
 
     model = create_model(
         args.model,
@@ -524,7 +529,8 @@ def main():
         distributed=args.distributed,
         collate_fn=collate_fn,
         pin_memory=args.pin_mem,
-        use_multi_epochs_loader=args.use_multi_epochs_loader
+        use_multi_epochs_loader=args.use_multi_epochs_loader,
+        repeated_aug=args.repeated_aug,
     )
 
     loader_eval = create_loader(
@@ -606,7 +612,7 @@ def main():
                 # step LR for next epoch
                 lr_scheduler.step(epoch + 1, eval_metrics[eval_metric])
 
-            if output_dir is not None:
+            if output_dir is not None and args.local_rank == 0:
                 update_summary(
                     epoch, train_metrics, eval_metrics, os.path.join(output_dir, 'summary.csv'),
                     write_header=best_metric is None, log_wandb=args.log_wandb and has_wandb)
@@ -615,6 +621,10 @@ def main():
                 # save proper checkpoint with eval metric
                 save_metric = eval_metrics[eval_metric]
                 best_metric, best_epoch = saver.save_checkpoint(epoch, metric=save_metric)
+
+            if args.pause is not None:
+                if epoch - start_epoch >= args.pause:
+                    break
 
     except KeyboardInterrupt:
         pass
