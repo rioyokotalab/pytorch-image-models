@@ -18,7 +18,7 @@ python -m torch.distributed.launch --nproc_per_node=$NUM_PROC train.py ./ \
     --input-size 3 224 224 \
     --opt sgd \
     --batch-size 96 \
-    --epochs 25 \
+    --epochs 1000 \
     --cooldown-epochs 0 \
     --lr 0.01 \
     --sched cosine \
@@ -29,6 +29,7 @@ python -m torch.distributed.launch --nproc_per_node=$NUM_PROC train.py ./ \
     --repeated-aug \
     --mixup 0.8 \
     --cutmix 1.0 \
+    --log-wandb \
     --output train_result \
     --experiment finetuning_vit_deit_base_patch16_224_1k_to_CIFAR10 \
     -j 8
