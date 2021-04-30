@@ -472,7 +472,11 @@ def main():
 
     if args.local_rank == 0:
         _logger.info('Scheduled epochs: {}'.format(num_epochs))
-
+    
+    # if needed, load dataset from torch
+    if args.dataset == 'CIFAR10':
+        args.data_dir = f'{args.data_dir}/cifar10_data'
+    
     # create the train and eval datasets
     dataset_train = create_dataset(
         args.dataset,

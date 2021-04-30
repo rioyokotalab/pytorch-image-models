@@ -1,5 +1,8 @@
 import os
 
+import torchvision.transforms as transforms
+import torchvision.datasets as datasets
+
 from .dataset import IterableImageDataset, ImageDataset
 
 
@@ -18,7 +21,24 @@ def _search_split(root, split):
 
 def create_dataset(name, root, split='validation', search_split=True, is_training=False, batch_size=None, **kwargs):
     name = name.lower()
-    if name.startswith('tfds'):
+    ds = None
+    if name == 'cifar10':
+        root_dir = f'{root}/{split}'
+        # normalization
+        form = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(
+                [0.4914, 0.4822, 0.4465],
+                [0.2023, 0.1994, 0.2010]
+                )
+        ])
+        ds = datasets.CIFAR10(
+            root=root_dir,
+            train=is_training,
+            transform=form,
+            download=True
+        )
+    elif name.startswith('tfds'):
         ds = IterableImageDataset(
             root, parser=name, split=split, is_training=is_training, batch_size=batch_size, **kwargs)
     else:
