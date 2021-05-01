@@ -38,6 +38,22 @@ def create_dataset(name, root, split='validation', search_split=True, is_trainin
             transform=form,
             download=True
         )
+    elif name == 'cifar100':
+        root_dir = f'{root}/{split}'
+        # normalization
+        form = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(
+                [x / 255.0 for x in [129.3, 124.1, 112.4]],
+                [x / 255.0 for x in [68.2, 65.4, 70.4]],
+                )
+        ])
+        ds = datasets.CIFAR100(
+            root=root_dir,
+            train=is_training,
+            transform=form,
+            download=True
+        )
     elif name.startswith('tfds'):
         ds = IterableImageDataset(
             root, parser=name, split=split, is_training=is_training, batch_size=batch_size, **kwargs)

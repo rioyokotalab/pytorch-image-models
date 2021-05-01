@@ -476,6 +476,8 @@ def main():
     # if needed, load dataset from torch
     if args.dataset == 'CIFAR10':
         args.data_dir = f'{args.data_dir}/cifar10_data'
+    elif args.dataset == 'CIFAR100':
+        args.data_dir = f'{args.data_dir}/cifar100_data'
     
     # create the train and eval datasets
     dataset_train = create_dataset(
