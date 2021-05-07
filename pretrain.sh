@@ -7,11 +7,9 @@
 . /etc/profile.d/modules.sh
 module load openmpi/3.1.6 cuda/11.1 cudnn/cuda-11.1/8.0
 
-echo 'Hello world'
-
 export NUM_PROC=8
 python -m torch.distributed.launch --nproc_per_node=$NUM_PROC train.py /mnt/nfs/datasets/ILSVRC2012 \
-    --model vit_deit_tiny_patch16_224 \
+    --model vit_deit_base_patch16_224 \
     --opt adamw \
     --batch-size 128 \
     --epochs 300 \
@@ -29,7 +27,5 @@ python -m torch.distributed.launch --nproc_per_node=$NUM_PROC train.py /mnt/nfs/
     --reprob 0.25 \
     --log-wandb \
     --output train_result \
-    --experiment PreTraining_vit_deit_tiny_patch16_224_1k \
+    --experiment PreTraining_vit_deit_base_patch16_224_1k \
     -j 8
-
-echo 'Hello world'

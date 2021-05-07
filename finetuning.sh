@@ -7,8 +7,6 @@
 . /etc/profile.d/modules.sh
 module load openmpi/3.1.6 cuda/11.1 cudnn/cuda-11.1/8.0
 
-echo 'Hello world'
-
 export NUM_PROC=8
 python -m torch.distributed.launch --nproc_per_node=$NUM_PROC train.py ./ \
     --pretrained \
@@ -33,5 +31,3 @@ python -m torch.distributed.launch --nproc_per_node=$NUM_PROC train.py ./ \
     --output train_result \
     --experiment finetuning_vit_deit_base_patch16_224_1k_to_CIFAR10 \
     -j 8
-
-echo 'Hello world'
