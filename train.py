@@ -25,6 +25,7 @@ from datetime import datetime
 
 import torch
 import torch.nn as nn
+import torch.distributed as dist
 import torchvision.utils
 from torch.nn.parallel import DistributedDataParallel as NativeDDP
 
@@ -284,6 +285,8 @@ parser.add_argument('--torchscript', dest='torchscript', action='store_true',
                     help='convert model torchscript for inference')
 parser.add_argument('--log-wandb', action='store_true', default=False,
                     help='log training and validation metrics to wandb')
+parser.add_argument('--fake-separated-loss-log', action='store_true', default=False,
+                    help='log loss separated by fake or not')
 
 parser.add_argument('--pause', type=int, default=None,
                     help='pause training at the epoch')
@@ -657,6 +660,10 @@ def train_one_epoch(
     data_time_m = AverageMeter()
     losses_m = AverageMeter()
 
+    if args.fake_separated_loss_log:
+        fake_losses_m = AverageMeter()
+        origin_losses_m = AverageMeter()
+
     model.train()
 
     end = time.time()
@@ -674,10 +681,35 @@ def train_one_epoch(
 
         with amp_autocast():
             output = model(input)
+
+            if args.fake_separated_loss_log:
+                # calc loss splited with [0-999], [1000-1999]
+                target_labels = torch.argmax(target, axis=1).cuda()
+                fake_output = output[target_labels < args.num_classes//2]
+                fake_target = target[target_labels < args.num_classes//2]
+                origin_output = output[target_labels >= args.num_classes//2]
+                origin_target = target[target_labels >= args.num_classes//2]
+                fake_loss = loss_fn(fake_output, fake_target)
+                origin_loss = loss_fn(origin_output, origin_target)
+                if len(fake_target) == 0:
+                    fake_loss = torch.zeros(1, dtype=torch.float32).cuda()
+                if len(origin_target) == 0:
+                    origin_loss = torch.zeros(1, dtype=torch.float32).cuda()
+
+                if args.local_rank == 0 and (last_batch or batch_idx % args.log_interval == 0):
+                    print(f'fake_target_shape: {fake_target.shape}, origin_target_shape: {origin_target.shape}')
+                    print(f'fake_loss: {fake_loss}, origin_loss: {origin_loss}')
+            
             loss = loss_fn(output, target)
 
         if not args.distributed:
             losses_m.update(loss.item(), input.size(0))
+
+            if args.fake_separated_loss_log:
+                if len(fake_target) > 0:
+                    fake_losses_m.update(fake_loss.item(), len(fake_target))
+                if len(origin_target) > 0:
+                    origin_losses_m.update(origin_loss.item(), len(origin_target))
 
         optimizer.zero_grad()
         if loss_scaler is not None:
@@ -698,15 +730,32 @@ def train_one_epoch(
             model_ema.update(model)
 
         torch.cuda.synchronize()
+
+        if args.distributed:
+            reduced_loss = reduce_tensor(loss.data, args.world_size)
+            losses_m.update(reduced_loss.item(), input.size(0))
+
+            if args.fake_separated_loss_log:
+                # len(fake_target)やlen(origin_target)を全プロセスで足し合わせて考慮する必要あり
+                fake_local_sum_loss = torch.tensor([len(fake_target)*fake_loss.item()], dtype=torch.float32).cuda()
+                dist.all_reduce(fake_local_sum_loss.data, op=dist.ReduceOp.SUM)
+                fake_nums = torch.tensor([len(fake_target)], dtype=torch.int64).cuda()
+                dist.all_reduce(fake_nums.data, op=dist.ReduceOp.SUM)
+                if fake_nums.item() > 0:
+                    fake_losses_m.update(fake_local_sum_loss.item()/fake_nums.item(), fake_nums.item())
+                
+                origin_local_sum_loss = torch.tensor([len(origin_target)*origin_loss.item()], dtype=torch.float32).cuda()
+                dist.all_reduce(origin_local_sum_loss.data, op=dist.ReduceOp.SUM)
+                origin_nums = torch.tensor([len(origin_target)], dtype=torch.int64).cuda()
+                dist.all_reduce(origin_nums.data, op=dist.ReduceOp.SUM)
+                if origin_nums.item() > 0:
+                    origin_losses_m.update(origin_local_sum_loss.item()/origin_nums.item(), origin_nums.item())
+
         num_updates += 1
         batch_time_m.update(time.time() - end)
         if last_batch or batch_idx % args.log_interval == 0:
             lrl = [param_group['lr'] for param_group in optimizer.param_groups]
             lr = sum(lrl) / len(lrl)
-
-            if args.distributed:
-                reduced_loss = reduce_tensor(loss.data, args.world_size)
-                losses_m.update(reduced_loss.item(), input.size(0))
 
             if args.local_rank == 0:
                 _logger.info(
@@ -745,8 +794,11 @@ def train_one_epoch(
 
     if hasattr(optimizer, 'sync_lookahead'):
         optimizer.sync_lookahead()
-
-    return OrderedDict([('loss', losses_m.avg)])
+    
+    if args.fake_separated_loss_log:
+        return OrderedDict([('loss', losses_m.avg), ('fake_loss', fake_losses_m.avg), ('origin_loss', origin_losses_m.avg)])
+    else:
+        return OrderedDict([('loss', losses_m.avg)])
 
 
 def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix=''):
