@@ -895,6 +895,10 @@ def validate(model, loader, loss_fn, label_loss_fn, args, amp_autocast=suppress,
             acc1, acc5 = accuracy(output, target_class, topk=(1, 5))
             acc1_label = accuracy_label(output_label, target_label)
 
+            if args.global_rank == 0:
+                    print(f"output_label : {output_label.shape}, target_label : {target_label.shape}")
+                    print(f"default acc1_label : {acc1_label}, acc1 : {acc1}")
+
             if args.distributed:
                 reduced_loss_class = reduce_tensor(loss_class.data, args.world_size)
                 reduced_loss_label = reduce_tensor(loss_label.data, args.world_size)
@@ -906,9 +910,6 @@ def validate(model, loader, loss_fn, label_loss_fn, args, amp_autocast=suppress,
                 reduced_loss_label = loss_label.data
 
             torch.cuda.synchronize()
-
-            if args.global_rank == 0:
-                    print(f"acc1_label : {acc1_label}, acc1 : {acc1}")
 
             losses_class_m.update(reduced_loss_class.item(), input.size(0))
             losses_label_m.update(reduced_loss_label.item(), input.size(0))
