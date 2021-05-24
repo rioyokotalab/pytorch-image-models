@@ -361,7 +361,7 @@ def main():
         _logger.warning("Neither APEX or native Torch AMP is available, using float32. "
                         "Install NVIDA apex or upgrade to PyTorch 1.6")
 
-    random_seed(args.seed, args.rank)
+    random_seed(args.seed, args.local_rank)
 
     if args.log_wandb and args.local_rank == 0:
         if has_wandb:
