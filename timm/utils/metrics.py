@@ -34,6 +34,7 @@ def accuracy(output, target, topk=(1,)):
     return [correct[:k].reshape(-1).float().sum(0) * 100. / batch_size for k in topk]
 
 def accuracy_label(output, target):
+    print(f"target shape : {target.shape}")
     batch_size = len(target)
     pred = (output >= 0).unsqueeze(1)
     correct = pred.eq(target.to(dtype=torch.bool))
