@@ -314,15 +314,24 @@ def main():
 
     args.prefetcher = not args.no_prefetcher
     args.distributed = False
-    if 'WORLD_SIZE' in os.environ:
-        args.distributed = int(os.environ['WORLD_SIZE']) > 1
+    if 'OMPI_COMM_WORLD_SIZE' in os.environ:
+        args.distributed = int(os.environ['OMPI_COMM_WORLD_SIZE']) > 1
     args.device = 'cuda:0'
     args.world_size = 1
     args.rank = 0  # global rank
     if args.distributed:
+
+        master_addr = os.getenv("MASTER_ADDR", default="localhost")
+        master_port = os.getenv('MASTER_PORT', default='8888')
+        method = "tcp://{}:{}".format(master_addr, master_port)
+        rank = int(os.getenv('OMPI_COMM_WORLD_RANK', '0'))
+        world_size = int(os.getenv('OMPI_COMM_WORLD_SIZE', '1'))
+        ngpus = torch.cuda.device_count()
+        args.local_rank = rank % ngpus
+
         args.device = 'cuda:%d' % args.local_rank
         torch.cuda.set_device(args.local_rank)
-        torch.distributed.init_process_group(backend='nccl', init_method='env://')
+        torch.distributed.init_process_group("nccl", init_method=method, rank=rank, world_size=world_size)
         args.world_size = torch.distributed.get_world_size()
         args.rank = torch.distributed.get_rank()
         _logger.info('Training in distributed mode with multiple processes, 1 GPU per process. Process %d, total %d.'
