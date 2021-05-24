@@ -1,3 +1,5 @@
+import torch
+
 """ Eval metrics and related
 
 Hacked together by / Copyright 2020 Ross Wightman
