@@ -35,6 +35,6 @@ def accuracy(output, target, topk=(1,)):
 
 def accuracy_label(output, target):
     batch_size = target.size(0)
-    pred = (output >= 0).unsqueeze(1)
+    pred = (output >= 0)
     correct = pred.eq(target.to(dtype=torch.bool))
     return correct.reshape(-1).float().sum(0) * 100. / batch_size

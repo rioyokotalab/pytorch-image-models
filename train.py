@@ -618,15 +618,15 @@ def main():
             if args.distributed and hasattr(loader_train.sampler, 'set_epoch'):
                 loader_train.sampler.set_epoch(epoch)
 
-            # train_metrics = train_one_epoch(
-            #     epoch, model, loader_train, optimizer, train_loss_fn, label_loss_fn, args,
-            #     lr_scheduler=lr_scheduler, saver=saver, output_dir=output_dir,
-            #     amp_autocast=amp_autocast, loss_scaler=loss_scaler, model_ema=model_ema, mixup_fn=mixup_fn)
+            train_metrics = train_one_epoch(
+                epoch, model, loader_train, optimizer, train_loss_fn, label_loss_fn, args,
+                lr_scheduler=lr_scheduler, saver=saver, output_dir=output_dir,
+                amp_autocast=amp_autocast, loss_scaler=loss_scaler, model_ema=model_ema, mixup_fn=mixup_fn)
 
-            # if args.distributed and args.dist_bn in ('broadcast', 'reduce'):
-            #     if args.global_rank == 0:
-            #         _logger.info("Distributing BatchNorm running means and vars")
-            #     distribute_bn(model, args.world_size, args.dist_bn == 'reduce')
+            if args.distributed and args.dist_bn in ('broadcast', 'reduce'):
+                if args.global_rank == 0:
+                    _logger.info("Distributing BatchNorm running means and vars")
+                distribute_bn(model, args.world_size, args.dist_bn == 'reduce')
 
             eval_metrics = validate(model, loader_eval, validate_loss_fn, label_loss_fn, args, amp_autocast=amp_autocast)
 
@@ -894,10 +894,6 @@ def validate(model, loader, loss_fn, label_loss_fn, args, amp_autocast=suppress,
             loss_label = label_loss_fn(output_label, target_label)
             acc1, acc5 = accuracy(output, target_class, topk=(1, 5))
             acc1_label = accuracy_label(output_label, target_label)
-
-            if args.global_rank == 0:
-                    print(f"output_label : {output_label.shape}, target_label : {target_label.shape}")
-                    print(f"default acc1_label : {acc1_label}, acc1 : {acc1}")
 
             if args.distributed:
                 reduced_loss_class = reduce_tensor(loss_class.data, args.world_size)
