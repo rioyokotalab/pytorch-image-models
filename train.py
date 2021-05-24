@@ -907,6 +907,9 @@ def validate(model, loader, loss_fn, label_loss_fn, args, amp_autocast=suppress,
 
             torch.cuda.synchronize()
 
+            if args.global_rank == 0:
+                    print(f"acc1_label : {acc1_label}, acc1 : {acc1}")
+
             losses_class_m.update(reduced_loss_class.item(), input.size(0))
             losses_label_m.update(reduced_loss_label.item(), input.size(0))
             top1_m.update(acc1.item(), output.size(0))
