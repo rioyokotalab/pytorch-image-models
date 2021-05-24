@@ -286,6 +286,7 @@ class VisionTransformer(nn.Module):
         self.head_dist = None
         if distilled:
             self.head_dist = nn.Linear(self.embed_dim, self.num_classes) if num_classes > 0 else nn.Identity()
+        self.head_label = nn.Linear(self.num_features, 1)
 
         # Weight init
         assert weight_init in ('jax', 'jax_nlhb', 'nlhb', '')
@@ -346,8 +347,9 @@ class VisionTransformer(nn.Module):
             else:
                 return (x + x_dist) / 2
         else:
+            x_label = self.head_label(x)
             x = self.head(x)
-        return x
+        return x, x_label
 
 
 def _init_vit_weights(m, n: str = '', head_bias: float = 0., jax_impl: bool = False):
