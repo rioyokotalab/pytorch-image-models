@@ -291,6 +291,15 @@ parser.add_argument('--fake-separated-loss-log', action='store_true', default=Fa
 parser.add_argument('--pause', type=int, default=None,
                     help='pause training at the epoch')
 
+# distributed training
+parser.add_argument('--world-size', default=-1, type=int,
+                    help='number of nodes for distributed training')
+parser.add_argument("--local_rank", default=0, type=int)
+parser.add_argument('--dist-backend', default='nccl', type=str,
+                    help='distributed backend')
+parser.add_argument('--device', default=None, type=int,
+                    help='GPU id to use.')
+
 def _parse_args():
     # Do we have a config file to parse?
     args_config, remaining = config_parser.parse_known_args()
@@ -311,34 +320,31 @@ def _parse_args():
 def main():
     setup_default_logging()
     args, args_text = _parse_args()
-
     args.prefetcher = not args.no_prefetcher
-    args.distributed = False
-    if 'OMPI_COMM_WORLD_SIZE' in os.environ:
-        args.distributed = int(os.environ['OMPI_COMM_WORLD_SIZE']) > 1
-    args.device = 'cuda:0'
-    args.world_size = 1
-    args.rank = 0  # global rank
+    args.distributed = True
+    if args.device is not None:
+        print("Use GPU: {} for training".format(args.device))
     if args.distributed:
-
+        # initialize torch.distributed using MPI
+        # from mpi4py import MPI
+        # comm = MPI.COMM_WORLD
+        # world_size = comm.Get_size()
+        # rank = comm.Get_rank()
+        # init_method = 'tcp://{}:23456'.format(args.dist_url)
         master_addr = os.getenv("MASTER_ADDR", default="localhost")
         master_port = os.getenv('MASTER_PORT', default='8888')
         method = "tcp://{}:{}".format(master_addr, master_port)
         rank = int(os.getenv('OMPI_COMM_WORLD_RANK', '0'))
         world_size = int(os.getenv('OMPI_COMM_WORLD_SIZE', '1'))
-        ngpus = torch.cuda.device_count()
-        args.local_rank = rank % ngpus
-
-        args.device = 'cuda:%d' % args.local_rank
-        torch.cuda.set_device(args.local_rank)
-        torch.distributed.init_process_group("nccl", init_method=method, rank=rank, world_size=world_size)
-        args.world_size = torch.distributed.get_world_size()
-        args.rank = torch.distributed.get_rank()
+        ngpus_per_node = torch.cuda.device_count()
+        device = rank % ngpus_per_node
+        torch.cuda.set_device(device)
+        torch.distributed.init_process_group('nccl', init_method=method, world_size=world_size, rank=rank)
+        args.local_rank = device
+        args.device = device
+        args.world_size = world_size
         _logger.info('Training in distributed mode with multiple processes, 1 GPU per process. Process %d, total %d.'
-                     % (args.rank, args.world_size))
-    else:
-        _logger.info('Training with a single process on 1 GPUs.')
-    assert args.rank >= 0
+                     % (args.local_rank, args.world_size))
 
     # resolve AMP arguments based on PyTorch / Apex availability
     use_amp = None
