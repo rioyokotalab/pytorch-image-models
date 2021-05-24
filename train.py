@@ -501,7 +501,7 @@ def main():
         mixup_args = dict(
             mixup_alpha=args.mixup, cutmix_alpha=args.cutmix, cutmix_minmax=args.cutmix_minmax,
             prob=args.mixup_prob, switch_prob=args.mixup_switch_prob, mode=args.mixup_mode,
-            label_smoothing=args.smoothing, num_classes=args.num_classes)
+            label_smoothing=args.smoothing, num_classes=args.num_classes*2)
         if args.prefetcher:
             assert not num_aug_splits  # collate conflict (need to support deinterleaving in collate mixup)
             collate_fn = FastCollateMixup(**mixup_args)
@@ -572,6 +572,7 @@ def main():
     else:
         train_loss_fn = nn.CrossEntropyLoss().cuda()
     validate_loss_fn = nn.CrossEntropyLoss().cuda()
+    label_loss_fn = nn.BCEWithLogitsLoss().cuda()
 
     # setup checkpoint saver and eval metric tracking
     eval_metric = args.eval_metric
@@ -601,17 +602,17 @@ def main():
             if args.distributed and hasattr(loader_train.sampler, 'set_epoch'):
                 loader_train.sampler.set_epoch(epoch)
 
-            train_metrics = train_one_epoch(
-                epoch, model, loader_train, optimizer, train_loss_fn, args,
-                lr_scheduler=lr_scheduler, saver=saver, output_dir=output_dir,
-                amp_autocast=amp_autocast, loss_scaler=loss_scaler, model_ema=model_ema, mixup_fn=mixup_fn)
+            # train_metrics = train_one_epoch(
+            #     epoch, model, loader_train, optimizer, train_loss_fn, label_loss_fn, args,
+            #     lr_scheduler=lr_scheduler, saver=saver, output_dir=output_dir,
+            #     amp_autocast=amp_autocast, loss_scaler=loss_scaler, model_ema=model_ema, mixup_fn=mixup_fn)
 
-            if args.distributed and args.dist_bn in ('broadcast', 'reduce'):
-                if args.local_rank == 0:
-                    _logger.info("Distributing BatchNorm running means and vars")
-                distribute_bn(model, args.world_size, args.dist_bn == 'reduce')
+            # if args.distributed and args.dist_bn in ('broadcast', 'reduce'):
+            #     if args.local_rank == 0:
+            #         _logger.info("Distributing BatchNorm running means and vars")
+            #     distribute_bn(model, args.world_size, args.dist_bn == 'reduce')
 
-            eval_metrics = validate(model, loader_eval, validate_loss_fn, args, amp_autocast=amp_autocast)
+            eval_metrics = validate(model, loader_eval, validate_loss_fn, label_loss_fn, args, amp_autocast=amp_autocast)
 
             if model_ema is not None and not args.model_ema_force_cpu:
                 if args.distributed and args.dist_bn in ('broadcast', 'reduce'):
@@ -645,7 +646,7 @@ def main():
 
 
 def train_one_epoch(
-        epoch, model, loader, optimizer, loss_fn, args,
+        epoch, model, loader, optimizer, loss_fn, label_loss_fn, args,
         lr_scheduler=None, saver=None, output_dir=None, amp_autocast=suppress,
         loss_scaler=None, model_ema=None, mixup_fn=None):
 
@@ -658,6 +659,8 @@ def train_one_epoch(
     second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
+    losses_label_m = AverageMeter()
+    losses_class_m = AverageMeter()
     losses_m = AverageMeter()
 
     if args.fake_separated_loss_log:
@@ -669,18 +672,25 @@ def train_one_epoch(
     end = time.time()
     last_idx = len(loader) - 1
     num_updates = epoch * len(loader)
+    # ここでとってくるローダーを二種類に ここで fake と original をここで input と　target にまーじ　(後回し)
+    # import pdb; pdb.set_trace()
     for batch_idx, (input, target) in enumerate(loader):
         last_batch = batch_idx == last_idx
         data_time_m.update(time.time() - end)
+
+        # target_labels = torch.argmax(target, axis=1).cuda()
+        target_original = target[:,:args.num_classes] + target[:,args.num_classes:]
+        target_label = torch.sum(target[:,args.num_classes:], 1).unsqueeze(1) # 横方法にたす([128, 1000] -> [128, 1]) 1->real, 0->fake
+
         if not args.prefetcher:
-            input, target = input.cuda(), target.cuda()
+            input, target_original = input.cuda(), target_original.cuda()
             if mixup_fn is not None:
-                input, target = mixup_fn(input, target)
+                input, target_original = mixup_fn(input, target_original)
         if args.channels_last:
             input = input.contiguous(memory_format=torch.channels_last)
 
         with amp_autocast():
-            output = model(input)
+            output, output_label = model(input)
 
             if args.fake_separated_loss_log:
                 # calc loss splited with [0-999], [1000-1999]
@@ -700,10 +710,16 @@ def train_one_epoch(
                     print(f'fake_target_shape: {fake_target.shape}, origin_target_shape: {origin_target.shape}')
                     print(f'fake_loss: {fake_loss}, origin_loss: {origin_loss}')
             
-            loss = loss_fn(output, target)
+            loss_class = loss_fn(output, target_original)
+            loss_label = label_loss_fn(output_label, target_label)
+            # loss = w1*fake_loss + w2*origin_loss みたいな感じ
+            # loss はそれぞれをwandbに保存します
+            loss = (loss_class + loss_label)/2
 
         if not args.distributed:
             losses_m.update(loss.item(), input.size(0))
+            losses_class_m.update(loss_class.item(), input.size(0))
+            losses_label_m.update(loss_label.item(), input.size(0))
 
             if args.fake_separated_loss_log:
                 if len(fake_target) > 0:
@@ -733,7 +749,11 @@ def train_one_epoch(
 
         if args.distributed:
             reduced_loss = reduce_tensor(loss.data, args.world_size)
+            reduced_loss_class = reduce_tensor(loss_class.data, args.world_size)
+            reduced_loss_label = reduce_tensor(loss_label.data, args.world_size)
             losses_m.update(reduced_loss.item(), input.size(0))
+            losses_class_m.update(reduced_loss_class.item(), input.size(0))
+            losses_label_m.update(reduced_loss_label.item(), input.size(0))
 
             if args.fake_separated_loss_log:
                 # len(fake_target)やlen(origin_target)を全プロセスで足し合わせて考慮する必要あり
@@ -761,6 +781,8 @@ def train_one_epoch(
                 _logger.info(
                     'Train: {} [{:>4d}/{} ({:>3.0f}%)]  '
                     'Loss: {loss.val:>9.6f} ({loss.avg:>6.4f})  '
+                    'Loss_Class: {loss_class.val:>7.4f} ({loss_class.avg:>6.4f})  '
+                    'Loss_Label: {loss_label.val:>7.4f} ({loss_label.avg:>6.4f})  '
                     'Time: {batch_time.val:.3f}s, {rate:>7.2f}/s  '
                     '({batch_time.avg:.3f}s, {rate_avg:>7.2f}/s)  '
                     'LR: {lr:.3e}  '
@@ -769,6 +791,8 @@ def train_one_epoch(
                         batch_idx, len(loader),
                         100. * batch_idx / last_idx,
                         loss=losses_m,
+                        loss_class=losses_class_m,
+                        loss_label=losses_label_m, 
                         batch_time=batch_time_m,
                         rate=input.size(0) * args.world_size / batch_time_m.val,
                         rate_avg=input.size(0) * args.world_size / batch_time_m.avg,
@@ -798,14 +822,16 @@ def train_one_epoch(
     if args.fake_separated_loss_log:
         return OrderedDict([('loss', losses_m.avg), ('fake_loss', fake_losses_m.avg), ('origin_loss', origin_losses_m.avg)])
     else:
-        return OrderedDict([('loss', losses_m.avg)])
+        return OrderedDict([('loss', losses_m.avg), ('loss_class', losses_class_m.avg), ('loss_label', losses_label_m.avg)])
 
 
-def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix=''):
+def validate(model, loader, loss_fn, label_loss_fn, args, amp_autocast=suppress, log_suffix=''):
     batch_time_m = AverageMeter()
-    losses_m = AverageMeter()
+    losses_class_m = AverageMeter()
+    losses_label_m = AverageMeter()
     top1_m = AverageMeter()
     top5_m = AverageMeter()
+    top1_label_m = AverageMeter()
 
     model.eval()
 
@@ -820,8 +846,17 @@ def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='')
             if args.channels_last:
                 input = input.contiguous(memory_format=torch.channels_last)
 
+            # print(f"target:{target.shape}, input:{input.shape}")
+            # fake_target = target[target < args.num_classes]
+            # origin_target = target[target >= args.num_classes]
+            target[target >= args.num_classes]-=args.num_classes
+            # ここでおそらくorigin_targetの調整が必要？
+            target_class = target
+            # target_class = torch.cat((fake_target, origin_target), 0).cuda()
+            target_label = (target >= args.num_classes).to(dtype=torch.float32).unsqueeze(1)
+
             with amp_autocast():
-                output = model(input)
+                output, output_label = model(input)
             if isinstance(output, (tuple, list)):
                 output = output[0]
 
@@ -829,23 +864,38 @@ def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='')
             reduce_factor = args.tta
             if reduce_factor > 1:
                 output = output.unfold(0, reduce_factor, reduce_factor).mean(dim=2)
+                output_label = output_label.unfold(0, reduce_factor, reduce_factor).mean(dim=2)
                 target = target[0:target.size(0):reduce_factor]
+                target_label = target_label[0:target_label.size(0):reduce_factor]
 
-            loss = loss_fn(output, target)
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            # print(f"target:{target}")
+            # print(f"target >= args.num_classes:{target >= args.num_classes}")
+            # print(f'output_label:{output_label}')
+            # print(f'target_label:{target_label}')
+            # import pdb; pdb.set_trace()
+
+            loss_class = loss_fn(output, target_class)
+            loss_label = label_loss_fn(output_label, target_label)
+            acc1, acc5 = accuracy(output, target_class, topk=(1, 5))
+            acc1_label = accuracy_label(output_label, target_label)
 
             if args.distributed:
-                reduced_loss = reduce_tensor(loss.data, args.world_size)
+                reduced_loss_class = reduce_tensor(loss_class.data, args.world_size)
+                reduced_loss_label = reduce_tensor(loss_label.data, args.world_size)
                 acc1 = reduce_tensor(acc1, args.world_size)
                 acc5 = reduce_tensor(acc5, args.world_size)
+                acc1_label = reduce_tensor(acc1_label, args.world_size)
             else:
-                reduced_loss = loss.data
+                reduced_loss_class = loss_class.data
+                reduced_loss_label = loss_label.data
 
             torch.cuda.synchronize()
 
-            losses_m.update(reduced_loss.item(), input.size(0))
+            losses_class_m.update(reduced_loss_class.item(), input.size(0))
+            losses_label_m.update(reduced_loss_label.item(), input.size(0))
             top1_m.update(acc1.item(), output.size(0))
             top5_m.update(acc5.item(), output.size(0))
+            top1_label_m.update(acc1_label.item(), output.size(0))
 
             batch_time_m.update(time.time() - end)
             end = time.time()
@@ -854,13 +904,15 @@ def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='')
                 _logger.info(
                     '{0}: [{1:>4d}/{2}]  '
                     'Time: {batch_time.val:.3f} ({batch_time.avg:.3f})  '
-                    'Loss: {loss.val:>7.4f} ({loss.avg:>6.4f})  '
+                    'Loss_Class: {loss_class.val:>7.4f} ({loss_class.avg:>6.4f})  '
+                    'Loss_Label: {loss_label.val:>7.4f} ({loss_label.avg:>6.4f})  '
                     'Acc@1: {top1.val:>7.4f} ({top1.avg:>7.4f})  '
-                    'Acc@5: {top5.val:>7.4f} ({top5.avg:>7.4f})'.format(
+                    'Acc@5: {top5.val:>7.4f} ({top5.avg:>7.4f})  '
+                    'Acc@label: {top1_label.val:>7.4f} ({top1_label.avg:>7.4f})'.format(
                         log_name, batch_idx, last_idx, batch_time=batch_time_m,
-                        loss=losses_m, top1=top1_m, top5=top5_m))
+                        loss_class=losses_class_m, loss_label=losses_label_m, top1=top1_m, top5=top5_m, top1_label=top1_label_m))
 
-    metrics = OrderedDict([('loss', losses_m.avg), ('top1', top1_m.avg), ('top5', top5_m.avg)])
+    metrics = OrderedDict([('loss_class', losses_class_m.avg), ('loss_label', losses_label_m.avg), ('top1', top1_m.avg), ('top5', top5_m.avg), ('top1_label', top1_label_m.avg)])
 
     return metrics
 

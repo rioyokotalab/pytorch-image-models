@@ -5,6 +5,7 @@ An example inference script that outputs top-k class ids for images in a folder 
 
 Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
 """
+import sys
 import os
 import time
 import argparse
@@ -117,7 +118,9 @@ def main():
 
     topk_ids = np.concatenate(topk_ids, axis=0).squeeze()
 
-    with open(os.path.join(args.output_dir, './topk_ids.csv'), 'w') as out_file:
+    
+
+    with open(os.path.join(args.output_dir, 'topk_ids.csv'), 'w') as out_file:
         filenames = loader.dataset.filenames(basename=True)
         for filename, label in zip(filenames, topk_ids):
             out_file.write('{0},{1},{2},{3},{4},{5}\n'.format(
