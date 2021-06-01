@@ -1,5 +1,8 @@
 from .byoanet import *
 from .byobnet import *
+from .cait import *
+from .coat import *
+from .convit import *
 from .cspnet import *
 from .densenet import *
 from .dla import *
@@ -13,6 +16,8 @@ from .hrnet import *
 from .inception_resnet_v2 import *
 from .inception_v3 import *
 from .inception_v4 import *
+from .levit import *
+from .mlp_mixer import *
 from .mobilenetv3 import *
 from .nasnet import *
 from .nfnet import *
@@ -31,11 +36,13 @@ from .swin_transformer import *
 from .tnt import *
 from .tresnet import *
 from .vgg import *
+from .visformer import *
 from .vision_transformer import *
 from .vision_transformer_hybrid import *
 from .vovnet import *
 from .xception import *
 from .xception_aligned import *
+from .twins import *
 
 from .factory import create_model, split_model_name, safe_model_name
 from .helpers import load_checkpoint, resume_checkpoint, model_parameters

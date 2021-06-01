@@ -13,8 +13,8 @@ import torch.nn.functional as F
 
 
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
-from .layers import SelectAdaptivePool2d, Linear, hard_sigmoid
-from .efficientnet_blocks import SqueezeExcite, ConvBnAct, make_divisible
+from .layers import SelectAdaptivePool2d, Linear, make_divisible
+from .efficientnet_blocks import SqueezeExcite, ConvBnAct
 from .helpers import build_model_with_cfg
 from .registry import register_model
 
@@ -40,7 +40,7 @@ default_cfgs = {
 }
 
 
-_SE_LAYER = partial(SqueezeExcite, gate_fn=hard_sigmoid, divisor=4)
+_SE_LAYER = partial(SqueezeExcite, gate_layer='hard_sigmoid', rd_round_fn=partial(make_divisible, divisor=4))
 
 
 class GhostModule(nn.Module):
@@ -92,7 +92,7 @@ class GhostBottleneck(nn.Module):
             self.bn_dw = None
 
         # Squeeze-and-excitation
-        self.se = _SE_LAYER(mid_chs, se_ratio=se_ratio) if has_se else None
+        self.se = _SE_LAYER(mid_chs, rd_ratio=se_ratio) if has_se else None
 
         # Point-wise linear projection
         self.ghost2 = GhostModule(mid_chs, out_chs, relu=False)
@@ -110,9 +110,8 @@ class GhostBottleneck(nn.Module):
                 nn.BatchNorm2d(out_chs),
             )
 
-
     def forward(self, x):
-        residual = x
+        shortcut = x
 
         # 1st ghost bottleneck
         x = self.ghost1(x)
@@ -129,7 +128,7 @@ class GhostBottleneck(nn.Module):
         # 2nd ghost bottleneck
         x = self.ghost2(x)
         
-        x += self.shortcut(residual)
+        x += self.shortcut(shortcut)
         return x
 
 
