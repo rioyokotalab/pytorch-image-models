@@ -14,6 +14,7 @@ from .constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from .distributed_sampler import OrderedDistributedSampler
 from .random_erasing import RandomErasing
 from .mixup import FastCollateMixup
+from .samplers import RASampler
 
 
 def fast_collate(batch):
@@ -155,6 +156,7 @@ def create_loader(
         tf_preprocessing=False,
         use_multi_epochs_loader=False,
         persistent_workers=True,
+        repeated_aug=False
 ):
     re_num_splits = 0
     if re_split:
@@ -186,7 +188,10 @@ def create_loader(
     sampler = None
     if distributed and not isinstance(dataset, torch.utils.data.IterableDataset):
         if is_training:
-            sampler = torch.utils.data.distributed.DistributedSampler(dataset)
+            if repeated_aug:
+                sampler = RASampler(dataset)
+            else:
+                sampler = torch.utils.data.DistributedSampler(dataset)
         else:
             # This will add extra duplicate entries to result in equal num
             # of samples per-process, will slightly alter validation results

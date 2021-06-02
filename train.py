@@ -216,6 +216,8 @@ parser.add_argument('--drop-path', type=float, default=None, metavar='PCT',
                     help='Drop path rate (default: None)')
 parser.add_argument('--drop-block', type=float, default=None, metavar='PCT',
                     help='Drop block rate (default: None)')
+parser.add_argument('--repeated-aug', action='store_true',
+                    help='Use repeated augmentation')
 
 # Batch norm parameters (only works with gen_efficientnet based models currently)
 parser.add_argument('--bn-tf', action='store_true', default=False,
@@ -538,7 +540,8 @@ def main():
         distributed=args.distributed,
         collate_fn=collate_fn,
         pin_memory=args.pin_mem,
-        use_multi_epochs_loader=args.use_multi_epochs_loader
+        use_multi_epochs_loader=args.use_multi_epochs_loader,
+        repeated_aug=args.repeated_aug
     )
 
     loader_eval = create_loader(
