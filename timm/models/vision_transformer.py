@@ -225,7 +225,7 @@ class VisionTransformer(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dim=768, depth=12,
                  num_heads=12, mlp_ratio=4., qkv_bias=True, qk_scale=None, representation_size=None, distilled=False,
                  drop_rate=0., attn_drop_rate=0., drop_path_rate=0., embed_layer=PatchEmbed, norm_layer=None,
-                 act_layer=None, weight_init=''):
+                 act_layer=None, weight_init='', separate_flg=False):
         """
         Args:
             img_size (int, tuple): input image size
@@ -270,6 +270,7 @@ class VisionTransformer(nn.Module):
                 drop=drop_rate, attn_drop=attn_drop_rate, drop_path=dpr[i], norm_layer=norm_layer, act_layer=act_layer)
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
+        self.separate_flg = separate_flg
 
         # Representation layer
         if representation_size and not distilled:
@@ -286,7 +287,8 @@ class VisionTransformer(nn.Module):
         self.head_dist = None
         if distilled:
             self.head_dist = nn.Linear(self.embed_dim, self.num_classes) if num_classes > 0 else nn.Identity()
-        self.head_label = nn.Linear(self.num_features, 1)
+        if self.separate_flg:
+            self.head_label = nn.Linear(self.num_features, 1)
 
         # Weight init
         assert weight_init in ('jax', 'jax_nlhb', 'nlhb', '')
@@ -347,9 +349,13 @@ class VisionTransformer(nn.Module):
             else:
                 return (x + x_dist) / 2
         else:
-            x_label = self.head_label(x)
+            if self.separate_flg:
+                x_label = self.head_label(x)
             x = self.head(x)
-        return x, x_label
+        if self.separate_flg:
+            return x, x_label
+        else:
+            return x
 
 
 def _init_vit_weights(m, n: str = '', head_bias: float = 0., jax_impl: bool = False):

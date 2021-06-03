@@ -1,20 +1,33 @@
 #!/bin/bash
-#YBATCH -r am_8
-#SBATCH -N 1
-#SBATCH -J vit_pretraining_fake1k_label
-#SBATCH --output output/%j.out
+#$ -cwd
+#$ -l rt_F=4
+#$ -l h_rt=72:00:00
+#$ -j y
+#$ -o output/o.$JOB_ID
 
-. /etc/profile.d/modules.sh
-module load openmpi/3.1.6 cuda/11.1 cudnn/cuda-11.1/8.0
+# ======== Pyenv/ ========
+export PYENV_ROOT=$HOME/.pyenv
+export PATH=$PYENV_ROOT/bin:$PATH
+eval "$(pyenv init -)"
 
-export NUM_PROC=8
-python -m torch.distributed.launch --nproc_per_node=$NUM_PROC train.py /mnt/nfs/datasets/Fake_v1+ILSVRC2012-2kClass-1.3kimgs \
+# ======== Modules ========
+source /etc/profile.d/modules.sh
+module load openmpi/3.1.6 cuda/11.1 cudnn/8.0 nccl/2.7
+
+# export MASTER_ADDR=$(/usr/sbin/ip a show dev bond0 | grep inet | cut -d " " -f 6 | cut -d "/" -f 1)
+export MASTER_ADDR=$(/usr/sbin/ip a show dev bond0 | grep 'inet ' | cut -d " " -f 6 | cut -d "/" -f 1)
+
+export NGPUS=16
+# batch-size = 1024 / NGPUS
+export NUM_PROC=4
+mpirun -npernode $NUM_PROC -np $NGPUS \
+python train_with_separate.py /groups/gca50014/imnet/Fake_v1+ILSVRC2012-2kClass-1.3kimgs \
     --val-split val_50 \
     --model vit_deit_tiny_patch16_224 \
     --opt adamw \
     --num-classes 1000 \
-    --batch-size 128 \
-    --epochs 300 \
+    --batch-size 64 \
+    --epochs 100 \
     --cooldown-epochs 0 \
     --lr 0.001 \
     --sched cosine \
@@ -29,5 +42,6 @@ python -m torch.distributed.launch --nproc_per_node=$NUM_PROC train.py /mnt/nfs/
     --reprob 0.25 \
     --log-wandb \
     --output train_result \
-    --experiment PreTraining_vit_deit_tiny_patch16_224_fake1k_label \
-    -j 8
+    --experiment Pretrain_vit_deit_tiny_patch16_224_fake1k_label_rate=0.1 \
+    --separate-rate 0.1 \
+    -j 4
