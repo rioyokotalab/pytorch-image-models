@@ -110,8 +110,8 @@ parser.add_argument('-vb', '--validation-batch-size-multiplier', type=int, defau
                     help='ratio of validation batch size to training batch size (default: 1)')
 
 # Optimizer parameters
-parser.add_argument('--opt', default='sgd', type=str, metavar='OPTIMIZER',
-                    help='Optimizer (default: "sgd"')
+parser.add_argument('--opt', default='sam', type=str, metavar='OPTIMIZER',
+                    help='Optimizer (default: "sam"')
 parser.add_argument('--opt-eps', default=None, type=float, metavar='EPSILON',
                     help='Optimizer Epsilon (default: None, use opt default)')
 parser.add_argument('--opt-betas', default=None, type=float, nargs='+', metavar='BETA',
@@ -124,6 +124,8 @@ parser.add_argument('--clip-grad', type=float, default=None, metavar='NORM',
                     help='Clip gradient norm (default: None, no clipping)')
 parser.add_argument('--clip-mode', type=str, default='norm',
                     help='Gradient clipping mode. One of ("norm", "value", "agc")')
+parser.add_argument('--nbs', type=float, default=0.0, metavar='NBS',
+                    help='Optimizer nbs by SAM (default: 0.0)')
 
 
 # Learning rate schedule parameters
@@ -295,6 +297,12 @@ parser.add_argument('--dist-backend', default='nccl', type=str,
                     help='distributed backend')
 parser.add_argument('--device', default=None, type=int,
                     help='GPU id to use.')
+parser.add_argument('--global_batch_size', default=None, type=int,
+                    help='global mini-batch size')
+parser.add_argument('--local_batch_size', default=None, type=int,
+                    help='local mini-batch size')
+parser.add_argument('--m', default=None, type=int,
+                    help='distrubuted nums')
 
 def _parse_args():
     # Do we have a config file to parse?
@@ -344,6 +352,12 @@ def main():
         _logger.info('Training in distributed mode with multiple processes, 1 GPU per process. Process %d, total %d.'
                      % (args.global_rank, args.world_size))
 
+    args.experiment = f"{args.experiment}_gbs={args.world_size*args.batch_size}_np={args.world_size}_nbs={args.nbs}"
+    args.global_batch_size = args.world_size*args.batch_size
+    args.local_batch_size = args.batch_size
+    args.m = args.world_size
+    args.output = f"/groups1/gcc50533/acc12015ij/trained_models/Vit_deit_224_16_SAM/{args.experiment}"
+
     # resolve AMP arguments based on PyTorch / Apex availability
     use_amp = None
     if args.amp:
@@ -364,7 +378,7 @@ def main():
 
     if args.log_wandb and args.global_rank == 0:
         if has_wandb:
-            wandb.init(project="pytorch-image-models", name=args.experiment, config=args)
+            wandb.init(project="pytorch-image-models-sam", name=args.experiment, config=args)
         else:
             _logger.warning("You've requested to log metrics to wandb but package not found. "
                             "Metrics not being logged to wandb, try `pip install wandb`")
@@ -658,6 +672,12 @@ def main():
             wandb.log({"best_eval_acc" : best_metric, "best_acc_epoch" : best_epoch})
         _logger.info('*** Best metric: {0} (epoch {1})'.format(best_metric, best_epoch))
 
+def save_model_buffers(model):
+    return [buf.data.clone().detach() for buf in model.buffers()]
+
+def load_model_buffers(model, buf_list):
+    for i,buf in enumerate(model.buffers()):
+        buf.data = buf_list[i]
 
 def train_one_epoch(
         epoch, model, loader, optimizer, loss_fn, args,
@@ -694,52 +714,51 @@ def train_one_epoch(
         if args.channels_last:
             input = input.contiguous(memory_format=torch.channels_last)
 
+        # save w_t params
+        w_t = []
+        for param_group in optimizer.param_groups:
+            w_t.append(param_group['params'])
+        optimizer.zero_grad()
+
+        # compute output and normal_grad each sam_local_batch without all-reduce normal_grad
+        # normal_gradはsam_bnごとに計算し，それぞれw_advを出すのに使うので，この時の同期は切断(all-reduceしない)
+        # この時のbatch normの平均と分散は．globalにsync (Sync Batch Normを使用している)
+        # ここでのbatch normの平均と分散を更新に反映
+        # ここのforward計算前にはw_tは揃っているはず．(normal gradを用いたstep更新では各プロセスは全く同じ計算をしているはず．)
+        with model.no_sync(), amp_autocast():
+            output = model(input)
+            # acc1 = accuracy(output, target)[0]
+            # calc normal_grad
+            loss = loss_fn(output, target)
+            loss.backward()
+            # compute w_adv from normal_grad
+            optimizer.step_calc_w_adv()
+        
+        # save model buffers (for Sync Batch Norm info)
+        buf_list = save_model_buffers(model)
+
+        # reset gradient
+        optimizer.zero_grad()
+
+        # この時のbatch normの平均と分散は．globalにsync (Sync Batch Normを使用している)
+        # ここでのbatch normの平均と分散の更新は反映しない．(後にresetする．)
         with amp_autocast():
             output = model(input)
-
-            if args.fake_separated_loss_log:
-                # calc loss splited with [0-999], [1000-1999]
-                target_labels = torch.argmax(target, axis=1).cuda()
-                fake_output = output[target_labels < args.num_classes//2]
-                fake_target = target[target_labels < args.num_classes//2]
-                origin_output = output[target_labels >= args.num_classes//2]
-                origin_target = target[target_labels >= args.num_classes//2]
-                fake_loss = loss_fn(fake_output, fake_target)
-                origin_loss = loss_fn(origin_output, origin_target)
-                if len(fake_target) == 0:
-                    fake_loss = torch.zeros(1, dtype=torch.float32).cuda()
-                if len(origin_target) == 0:
-                    origin_loss = torch.zeros(1, dtype=torch.float32).cuda()
-
-                if args.global_rank == 0 and (last_batch or batch_idx % args.log_interval == 0):
-                    print(f'fake_target_shape: {fake_target.shape}, origin_target_shape: {origin_target.shape}')
-                    print(f'fake_loss: {fake_loss}, origin_loss: {origin_loss}')
-            
+            # calc sam loss (each sam batch)
             loss = loss_fn(output, target)
 
-        if not args.distributed:
-            losses_m.update(loss.item(), input.size(0))
+        # calc global sam_grad (with all-reduce sam_grad each sam batch)
+        loss.backward()
 
-            if args.fake_separated_loss_log:
-                if len(fake_target) > 0:
-                    fake_losses_m.update(fake_loss.item(), len(fake_target))
-                if len(origin_target) > 0:
-                    origin_losses_m.update(origin_loss.item(), len(origin_target))
-
-        optimizer.zero_grad()
-        if loss_scaler is not None:
-            loss_scaler(
-                loss, optimizer,
-                clip_grad=args.clip_grad, clip_mode=args.clip_mode,
-                parameters=model_parameters(model, exclude_head='agc' in args.clip_mode),
-                create_graph=second_order)
-        else:
-            loss.backward(create_graph=second_order)
-            if args.clip_grad is not None:
-                dispatch_clip_grad(
-                    model_parameters(model, exclude_head='agc' in args.clip_mode),
-                    value=args.clip_grad, mode=args.clip_mode)
-            optimizer.step()
+        if args.clip_grad is not None:
+            dispatch_clip_grad(
+                model_parameters(model, exclude_head='agc' in args.clip_mode),
+                value=args.clip_grad, mode=args.clip_mode)
+        
+        # load w_t weights params (without gradient information)
+        # update weights params from sam grad
+        # 元の位置(w_t)からglobal sam_gradを用いて更新！
+        optimizer.load_original_params_and_step(w_t)
 
         if model_ema is not None:
             model_ema.update(model)
@@ -749,22 +768,6 @@ def train_one_epoch(
         if args.distributed:
             reduced_loss = reduce_tensor(loss.data, args.world_size)
             losses_m.update(reduced_loss.item(), input.size(0))
-
-            if args.fake_separated_loss_log:
-                # len(fake_target)やlen(origin_target)を全プロセスで足し合わせて考慮する必要あり
-                fake_local_sum_loss = torch.tensor([len(fake_target)*fake_loss.item()], dtype=torch.float32).cuda()
-                dist.all_reduce(fake_local_sum_loss.data, op=dist.ReduceOp.SUM)
-                fake_nums = torch.tensor([len(fake_target)], dtype=torch.int64).cuda()
-                dist.all_reduce(fake_nums.data, op=dist.ReduceOp.SUM)
-                if fake_nums.item() > 0:
-                    fake_losses_m.update(fake_local_sum_loss.item()/fake_nums.item(), fake_nums.item())
-                
-                origin_local_sum_loss = torch.tensor([len(origin_target)*origin_loss.item()], dtype=torch.float32).cuda()
-                dist.all_reduce(origin_local_sum_loss.data, op=dist.ReduceOp.SUM)
-                origin_nums = torch.tensor([len(origin_target)], dtype=torch.int64).cuda()
-                dist.all_reduce(origin_nums.data, op=dist.ReduceOp.SUM)
-                if origin_nums.item() > 0:
-                    origin_losses_m.update(origin_local_sum_loss.item()/origin_nums.item(), origin_nums.item())
 
         num_updates += 1
         batch_time_m.update(time.time() - end)
@@ -805,6 +808,9 @@ def train_one_epoch(
             lr_scheduler.step_update(num_updates=num_updates, metric=losses_m.avg)
 
         end = time.time()
+
+        # load model buffers (reset BN info because computed BN info again)
+        load_model_buffers(model, buf_list)
         # end for
 
     if hasattr(optimizer, 'sync_lookahead'):

@@ -18,6 +18,7 @@ from .radam import RAdam
 from .rmsprop_tf import RMSpropTF
 from .sgdp import SGDP
 from .adabelief import AdaBelief
+from .sam import SAM
 
 try:
     from apex.optimizers import FusedNovoGrad, FusedAdam, FusedLAMB, FusedSGD
@@ -56,6 +57,8 @@ def optimizer_kwargs(cfg):
         kwargs['betas'] = cfg.opt_betas
     if getattr(cfg, 'opt_args', None) is not None:
         kwargs.update(cfg.opt_args)
+    if getattr(cfg, 'nbs', None) is not None:
+        kwargs['nbs'] = cfg.nbs
     return kwargs
 
 
@@ -163,6 +166,8 @@ def create_optimizer_v2(
     elif opt_lower == 'fusednovograd':
         opt_args.setdefault('betas', (0.95, 0.98))
         optimizer = FusedNovoGrad(parameters, **opt_args)
+    elif opt_lower == 'sam':
+        optimizer = SAM(parameters, momentum=momentum, **opt_args)
     else:
         assert False and "Invalid optimizer"
         raise ValueError
