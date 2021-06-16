@@ -156,7 +156,8 @@ def create_loader(
         tf_preprocessing=False,
         use_multi_epochs_loader=False,
         persistent_workers=True,
-        repeated_aug=False
+        repeated_aug=False,
+        split_fake=False,
 ):
     re_num_splits = 0
     if re_split:
@@ -189,7 +190,10 @@ def create_loader(
     if distributed and not isinstance(dataset, torch.utils.data.IterableDataset):
         if is_training:
             if repeated_aug:
-                sampler = RASampler(dataset)
+                if split_fake:
+                    sampler = RASamplerSplit(dataset, batch_size)
+                else:
+                    sampler = RASampler(dataset)
             else:
                 sampler = torch.utils.data.DistributedSampler(dataset)
         else:

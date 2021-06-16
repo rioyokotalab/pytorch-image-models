@@ -27,6 +27,7 @@ import torch
 import torch.nn as nn
 import torchvision.utils
 from torch.nn.parallel import DistributedDataParallel as NativeDDP
+import torch.distributed as dist
 
 from timm.data import create_dataset, create_loader, resolve_data_config, Mixup, FastCollateMixup, AugMixDataset
 from timm.models import create_model, safe_model_name, resume_checkpoint, load_checkpoint,\
@@ -289,6 +290,12 @@ parser.add_argument('--pause', type=int, default=None,
 parser.add_argument('--dist-backend', default='nccl', type=str,
                     help='distributed backend')
 
+# training with fake imagenet
+parser.add_argument('--split-loss', action='store_true',
+                    help='split total loss to fake and real')
+parser.add_argument('--weight', default=0.5, type=float,
+                    help='weight for fake imagenet loss')
+
 def _parse_args():
     # Do we have a config file to parse?
     args_config, remaining = config_parser.parse_known_args()
@@ -540,7 +547,8 @@ def main():
         collate_fn=collate_fn,
         pin_memory=args.pin_mem,
         use_multi_epochs_loader=args.use_multi_epochs_loader,
-        repeated_aug=args.repeated_aug
+        repeated_aug=args.repeated_aug,
+        split_fake=args.split_loss
     )
 
     loader_eval = create_loader(
@@ -555,7 +563,7 @@ def main():
         num_workers=args.workers,
         distributed=args.distributed,
         crop_pct=data_config['crop_pct'],
-        pin_memory=args.pin_mem,
+        pin_memory=args.pin_mem
     )
 
     # setup loss function
@@ -657,6 +665,9 @@ def train_one_epoch(
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     losses_m = AverageMeter()
+    if args.split_loss:
+        fake_losses_m = AverageMeter()
+        real_losses_m = AverageMeter()
 
     model.train()
 
@@ -675,10 +686,37 @@ def train_one_epoch(
 
         with amp_autocast():
             output = model(input)
-            loss = loss_fn(output, target)
+
+            if args.split_loss:
+                # [0-999] for fake images, [1000-1999] for real images
+                target_labels = torch.argmax(target, axis=1).cuda()
+                fake_output = output[target_labels < args.num_classes // 2]
+                fake_target = target[target_labels < args.num_classes // 2]
+                real_output = output[target_labels >= args.num_classes // 2]
+                real_target = target[target_labels >= args.num_classes // 2]
+                fake_loss = loss_fn(fake_output, fake_target)
+                real_loss = loss_fn(real_output, real_target)
+                if len(fake_target) == 0:
+                    fake_loss = torch.zeros(1, dtype=torch.float32).cuda()
+                    loss = real_loss
+                elif len(real_target) == 0:
+                    real_loss = torch.zeros(1, dtype=torch.float32).cuda()
+                    loss = fake_loss
+                else:
+                    loss = args.weight * fake_loss + (1 - args.weight) * real_loss
+
+                # if args.rank == 0 and (last_batch or batch_idx % args.log_interval == 0):
+                #     print(f'fake_target_shape: {fake_target.shape}, real_target_shape: {real_target.shape}')
+            else:
+                loss = loss_fn(output, target)
 
         if not args.distributed:
             losses_m.update(loss.item(), input.size(0))
+            if args.split_loss:
+                if len(fake_target) > 0:
+                    fake_losses_m.update(fake_loss.item(), len(fake_target))
+                if len(origin_target) > 0:
+                    real_losses_m.update(real_loss.item(), len(real_target))
 
         optimizer.zero_grad()
         if loss_scaler is not None:
@@ -709,23 +747,62 @@ def train_one_epoch(
                 reduced_loss = reduce_tensor(loss.data, args.world_size)
                 losses_m.update(reduced_loss.item(), input.size(0))
 
+                if args.split_loss:
+                    fake_nums = torch.tensor(len(fake_target), dtype=torch.float32).cuda()
+                    reduced_fake_nums = reduce_tensor(fake_nums.data, 1)
+                    if reduced_fake_nums.item() > 0:
+                        fake_local_sum_loss = torch.tensor(len(fake_target) * fake_loss.item(),
+                                                           dtype=torch.float32).cuda()
+                        reduced_fake_loss = reduce_tensor(fake_local_sum_loss.data, reduced_fake_nums.item())
+                        fake_losses_m.update(reduced_fake_loss.item(), reduced_fake_nums.item())
+
+                    real_nums = torch.tensor(len(real_target), dtype=torch.float32).cuda()
+                    reduced_real_nums = reduce_tensor(real_nums.data, 1)
+                    if reduced_real_nums.item() > 0:
+                        real_local_sum_loss = torch.tensor(len(real_target) * real_loss.item(),
+                                                           dtype=torch.float32).cuda()
+                        reduced_real_loss = reduce_tensor(real_local_sum_loss.data, reduced_real_nums.item())
+                        real_losses_m.update(reduced_real_loss.item(), reduced_real_nums.item())
+
             if args.rank == 0:
-                _logger.info(
-                    'Train: {} [{:>4d}/{} ({:>3.0f}%)]  '
-                    'Loss: {loss.val:>9.6f} ({loss.avg:>6.4f})  '
-                    'Time: {batch_time.val:.3f}s, {rate:>7.2f}/s  '
-                    '({batch_time.avg:.3f}s, {rate_avg:>7.2f}/s)  '
-                    'LR: {lr:.3e}  '
-                    'Data: {data_time.val:.3f} ({data_time.avg:.3f})'.format(
-                        epoch,
-                        batch_idx, len(loader),
-                        100. * batch_idx / last_idx,
-                        loss=losses_m,
-                        batch_time=batch_time_m,
-                        rate=input.size(0) * args.world_size / batch_time_m.val,
-                        rate_avg=input.size(0) * args.world_size / batch_time_m.avg,
-                        lr=lr,
-                        data_time=data_time_m))
+                if args.split_loss:
+                    _logger.info(
+                        'Train: {} [{:>4d}/{} ({:>3.0f}%)]  '
+                        'Loss: {loss.val:>9.6f} ({loss.avg:>6.4f})  '
+                        'Real_Loss: {real_loss.val:>9.6f} ({real_loss.avg:>6.4f})  '
+                        'Fake_Loss: {fake_loss.val:>9.6f} ({fake_loss.avg:>6.4f})  '
+                        'Time: {batch_time.val:.3f}s, {rate:>7.2f}/s  '
+                        '({batch_time.avg:.3f}s, {rate_avg:>7.2f}/s)  '
+                        'LR: {lr:.3e}  '
+                        'Data: {data_time.val:.3f} ({data_time.avg:.3f})'.format(
+                            epoch,
+                            batch_idx, len(loader),
+                            100. * batch_idx / last_idx,
+                            loss=losses_m,
+                            real_loss=real_losses_m,
+                            fake_loss=fake_losses_m,
+                            batch_time=batch_time_m,
+                            rate=input.size(0) * args.world_size / batch_time_m.val,
+                            rate_avg=input.size(0) * args.world_size / batch_time_m.avg,
+                            lr=lr,
+                            data_time=data_time_m))
+                else:
+                    _logger.info(
+                        'Train: {} [{:>4d}/{} ({:>3.0f}%)]  '
+                        'Loss: {loss.val:>9.6f} ({loss.avg:>6.4f})  '
+                        'Time: {batch_time.val:.3f}s, {rate:>7.2f}/s  '
+                        '({batch_time.avg:.3f}s, {rate_avg:>7.2f}/s)  '
+                        'LR: {lr:.3e}  '
+                        'Data: {data_time.val:.3f} ({data_time.avg:.3f})'.format(
+                            epoch,
+                            batch_idx, len(loader),
+                            100. * batch_idx / last_idx,
+                            loss=losses_m,
+                            batch_time=batch_time_m,
+                            rate=input.size(0) * args.world_size / batch_time_m.val,
+                            rate_avg=input.size(0) * args.world_size / batch_time_m.avg,
+                            lr=lr,
+                            data_time=data_time_m))
 
                 if args.save_images and output_dir:
                     torchvision.utils.save_image(
@@ -747,7 +824,10 @@ def train_one_epoch(
     if hasattr(optimizer, 'sync_lookahead'):
         optimizer.sync_lookahead()
 
-    return OrderedDict([('loss', losses_m.avg)])
+    if args.split_loss:
+        return OrderedDict([('loss', losses_m.avg), ('fake_loss', fake_losses_m.avg), ('real_loss', real_losses_m.avg)])
+    else:
+        return OrderedDict([('loss', losses_m.avg)])
 
 
 def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix=''):
@@ -755,6 +835,13 @@ def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='')
     losses_m = AverageMeter()
     top1_m = AverageMeter()
     top5_m = AverageMeter()
+    if args.split_loss:
+        fake_losses_m = AverageMeter()
+        real_losses_m = AverageMeter()
+        fake_top1_m = AverageMeter()
+        real_top1_m = AverageMeter()
+        fake_top5_m = AverageMeter()
+        real_top5_m = AverageMeter()
 
     model.eval()
 
@@ -780,6 +867,27 @@ def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='')
                 output = output.unfold(0, reduce_factor, reduce_factor).mean(dim=2)
                 target = target[0:target.size(0):reduce_factor]
 
+            if args.split_loss:
+                # [0-999] for fake images, [1000-1999] for real images
+                fake_output = output[target < args.num_classes // 2]
+                fake_target = target[target < args.num_classes // 2]
+                real_output = output[target >= args.num_classes // 2]
+                real_target = target[target >= args.num_classes // 2]
+                fake_loss = loss_fn(fake_output, fake_target)
+                real_loss = loss_fn(real_output, real_target)
+                fake_acc1, fake_acc5 = accuracy(fake_output, fake_target, topk=(1, 5))
+                real_acc1, real_acc5 = accuracy(real_output, real_target, topk=(1, 5))
+                if len(fake_target) == 0:
+                    fake_loss = torch.zeros(1, dtype=torch.float32).cuda()
+                    fake_acc1 = torch.zeros(1, dtype=torch.float32).cuda()
+                    fake_acc5 = torch.zeros(1, dtype=torch.float32).cuda()
+                if len(real_target) == 0:
+                    real_loss = torch.zeros(1, dtype=torch.float32).cuda()
+                    real_acc1 = torch.zeros(1, dtype=torch.float32).cuda()
+                    real_acc5 = torch.zeros(1, dtype=torch.float32).cuda()
+
+                # if args.rank == 0 and (last_batch or batch_idx % args.log_interval == 0):
+                #     print(f'fake_target_shape: {fake_target.shape}, real_target_shape: {real_target.shape}')
             loss = loss_fn(output, target)
             acc1, acc5 = accuracy(output, target, topk=(1, 5))
 
@@ -787,6 +895,38 @@ def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='')
                 reduced_loss = reduce_tensor(loss.data, args.world_size)
                 acc1 = reduce_tensor(acc1, args.world_size)
                 acc5 = reduce_tensor(acc5, args.world_size)
+                if args.split_loss:
+                    fake_nums = torch.tensor(len(fake_target), dtype=torch.float32).cuda()
+                    reduced_fake_nums = reduce_tensor(fake_nums.data, 1)
+                    real_nums = torch.tensor(len(real_target), dtype=torch.float32).cuda()
+                    reduced_real_nums = reduce_tensor(real_nums.data, 1)
+                    if reduced_fake_nums.item() > 0:
+                        fake_local_sum_loss = torch.tensor(len(fake_target) * fake_loss.item(),
+                                                           dtype=torch.float32).cuda()
+                        fake_local_sum_acc1 = torch.tensor(len(fake_target) * fake_acc1.item(),
+                                                           dtype=torch.float32).cuda()
+                        fake_local_sum_acc5 = torch.tensor(len(fake_target) * fake_acc5.item(),
+                                                           dtype=torch.float32).cuda()
+                        reduced_fake_loss = reduce_tensor(fake_local_sum_loss.data, reduced_fake_nums.item())
+                        reduced_fake_acc1 = reduce_tensor(fake_local_sum_acc1.data, reduced_fake_nums.item())
+                        reduced_fake_acc5 = reduce_tensor(fake_local_sum_acc5.data, reduced_fake_nums.item())
+                        fake_losses_m.update(reduced_fake_loss.item(), reduced_fake_nums.item())
+                        fake_top1_m.update(reduced_fake_acc1.item(), reduced_fake_nums.item())
+                        fake_top5_m.update(reduced_fake_acc5.item(), reduced_fake_nums.item())
+
+                    if reduced_real_nums.item() > 0:
+                        real_local_sum_loss = torch.tensor(len(real_target) * real_loss.item(),
+                                                           dtype=torch.float32).cuda()
+                        real_local_sum_acc1 = torch.tensor(len(real_target) * real_acc1.item(),
+                                                           dtype=torch.float32).cuda()
+                        real_local_sum_acc5 = torch.tensor(len(real_target) * real_acc5.item(),
+                                                           dtype=torch.float32).cuda()
+                        reduced_real_loss = reduce_tensor(real_local_sum_loss.data, reduced_real_nums.item())
+                        reduced_real_acc1 = reduce_tensor(real_local_sum_acc1.data, reduced_real_nums.item())
+                        reduced_real_acc5 = reduce_tensor(real_local_sum_acc5.data, reduced_real_nums.item())
+                        real_losses_m.update(reduced_real_loss.item(), reduced_real_nums.item())
+                        real_top1_m.update(reduced_real_acc1.item(), reduced_real_nums.item())
+                        real_top5_m.update(reduced_real_acc5.item(), reduced_real_nums.item())
             else:
                 reduced_loss = loss.data
 
@@ -800,16 +940,35 @@ def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='')
             end = time.time()
             if args.rank == 0 and (last_batch or batch_idx % args.log_interval == 0):
                 log_name = 'Test' + log_suffix
-                _logger.info(
-                    '{0}: [{1:>4d}/{2}]  '
-                    'Time: {batch_time.val:.3f} ({batch_time.avg:.3f})  '
-                    'Loss: {loss.val:>7.4f} ({loss.avg:>6.4f})  '
-                    'Acc@1: {top1.val:>7.4f} ({top1.avg:>7.4f})  '
-                    'Acc@5: {top5.val:>7.4f} ({top5.avg:>7.4f})'.format(
-                        log_name, batch_idx, last_idx, batch_time=batch_time_m,
-                        loss=losses_m, top1=top1_m, top5=top5_m))
-
-    metrics = OrderedDict([('loss', losses_m.avg), ('top1', top1_m.avg), ('top5', top5_m.avg)])
+                if args.split_loss:
+                    _logger.info(
+                        '{0}: [{1:>4d}/{2}]  '
+                        'Time: {batch_time.val:.3f} ({batch_time.avg:.3f})  '
+                        'Loss: {loss.val:>7.4f} ({loss.avg:>6.4f})  '
+                        'Real_Loss: {real_loss.val:>7.4f} ({real_loss.avg:>6.4f})  '
+                        'Fake_Loss: {fake_loss.val:>7.4f} ({fake_loss.avg:>6.4f})  '
+                        'Acc@1: {top1.val:>7.4f} ({top1.avg:>7.4f})  '
+                        'Real_Acc@1: {real_top1.val:>7.4f} ({real_top1.avg:>7.4f})  '
+                        'Fake_Acc@1: {fake_top1.val:>7.4f} ({fake_top1.avg:>7.4f})  '
+                        'Acc@5: {top5.val:>7.4f} ({top5.avg:>7.4f})'.format(
+                            log_name, batch_idx, last_idx, batch_time=batch_time_m,
+                            loss=losses_m, real_loss=real_losses_m, fake_loss=fake_losses_m,
+                            top1=top1_m, real_top1=real_top1_m, fake_top1=fake_top1_m, top5=top5_m))
+                else:
+                    _logger.info(
+                        '{0}: [{1:>4d}/{2}]  '
+                        'Time: {batch_time.val:.3f} ({batch_time.avg:.3f})  '
+                        'Loss: {loss.val:>7.4f} ({loss.avg:>6.4f})  '
+                        'Acc@1: {top1.val:>7.4f} ({top1.avg:>7.4f})  '
+                        'Acc@5: {top5.val:>7.4f} ({top5.avg:>7.4f})'.format(
+                            log_name, batch_idx, last_idx, batch_time=batch_time_m,
+                            loss=losses_m, top1=top1_m, top5=top5_m))
+    if args.split_loss:
+        metrics = OrderedDict([('loss', losses_m.avg), ('real_loss', real_losses_m.avg), ('fake_loss', fake_losses_m.avg),
+                               ('top1', top1_m.avg), ('real_top1', real_top1_m.avg), ('fake_top1', fake_top1_m.avg),
+                               ('top5', top5_m.avg), ('real_top5', real_top5_m.avg), ('fake_top5', fake_top5_m.avg)])
+    else:
+        metrics = OrderedDict([('loss', losses_m.avg), ('top1', top1_m.avg), ('top5', top5_m.avg)])
 
     return metrics
 
