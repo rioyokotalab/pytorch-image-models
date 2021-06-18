@@ -8,12 +8,14 @@ Copyright 2020 Ross Wightman
 """
 import math
 from functools import partial
+import sys
+import numpy as np
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
+from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, CIFAR10_DEFAULT_MEAN, CIFAR10_DEFAULT_STD
 from .helpers import build_model_with_cfg
 from .layers import DropBlock2d, DropPath, AvgPool2dSame, BlurPool2d, create_attn, get_attn, create_classifier
 from .registry import register_model
@@ -84,6 +86,8 @@ default_cfgs = {
         url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/wide_resnet50_racm-8234f177.pth',
         interpolation='bicubic'),
     'wide_resnet101_2': _cfg(url='https://download.pytorch.org/models/wide_resnet101_2-32ee1156.pth'),
+    'wide_resnet28_10': _cfg(url='', interpolation='bicubic', input_size=(3, 32, 32), pool_size=(8, 8), 
+        test_input_size=(3, 32, 32), num_classes=10, mean=CIFAR10_DEFAULT_MEAN, std=CIFAR10_DEFAULT_STD,),
 
     # ResNeXt
     'resnext50_32x4d': _cfg(
@@ -676,10 +680,121 @@ class ResNet(nn.Module):
         x = self.fc(x)
         return x
 
+def conv3x3(in_planes, out_planes, stride=1):
+    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=True)
+
+def conv_init(m):
+    classname = m.__class__.__name__
+    if classname.find('Conv') != -1:
+        init.xavier_uniform_(m.weight, gain=np.sqrt(2))
+        init.constant_(m.bias, 0)
+    elif classname.find('BatchNorm') != -1:
+        init.constant_(m.weight, 1)
+        init.constant_(m.bias, 0)
+
+class wide_basic(nn.Module):
+    def __init__(self, in_planes, planes, dropout_rate, stride=1):
+        super(wide_basic, self).__init__()
+        self.bn1 = nn.BatchNorm2d(in_planes)
+        self.conv1 = nn.Conv2d(in_planes, planes, kernel_size=3, padding=1, bias=True)
+        self.dropout = nn.Dropout(p=dropout_rate)
+        self.bn2 = nn.BatchNorm2d(planes)
+        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride, padding=1, bias=True)
+
+        self.shortcut = nn.Sequential()
+        if stride != 1 or in_planes != planes:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_planes, planes, kernel_size=1, stride=stride, bias=True),
+            )
+
+    def forward(self, x):
+        out = self.dropout(self.conv1(F.relu(self.bn1(x))))
+        out = self.conv2(F.relu(self.bn2(out)))
+        out += self.shortcut(x)
+
+        return out
+
+class ResNet2(nn.Module):
+    """
+    WRN-28-10
+    """
+
+    def __init__(self, depth, widen_factor, num_classes=1000, in_chans=3,
+                 cardinality=1, base_width=64, stem_width=64, stem_type='', replace_stem_pool=False,
+                 output_stride=32, block_reduce_first=1, down_kernel_size=1, avg_down=False,
+                 act_layer=nn.ReLU, norm_layer=nn.BatchNorm2d, aa_layer=None, drop_rate=0.0, drop_path_rate=0.,
+                 drop_block_rate=0., global_pool='avg', zero_init_last_bn=True, block_args=None):
+        super(ResNet2, self).__init__()
+        self.in_planes = 16
+
+        assert ((depth-4)%6 ==0), 'Wide-resnet depth should be 6n+4'
+        n = (depth-4)/6
+        k = widen_factor
+
+        print('| Wide-Resnet %dx%d' %(depth, k))
+        nStages = [16, 16*k, 32*k, 64*k]
+
+        self.conv1 = conv3x3(3,nStages[0])
+        self.layer1 = self._wide_layer(wide_basic, nStages[1], n, drop_rate, stride=1)
+        self.layer2 = self._wide_layer(wide_basic, nStages[2], n, drop_rate, stride=2)
+        self.layer3 = self._wide_layer(wide_basic, nStages[3], n, drop_rate, stride=2)
+        self.bn1 = nn.BatchNorm2d(nStages[3], momentum=0.9)
+        self.fc = nn.Linear(nStages[3], num_classes)
+        self.num_classes = num_classes
+
+        # Head (Pooling and Classifier)
+        self.num_features = nStages[3]
+        self.global_pool, self.fc = create_classifier(self.num_features, self.num_classes, pool_type=global_pool)
+
+        for n, m in self.named_modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1.)
+                nn.init.constant_(m.bias, 0.)
+        if zero_init_last_bn:
+            for m in self.modules():
+                if hasattr(m, 'zero_init_last_bn'):
+                    m.zero_init_last_bn()
+
+    def _wide_layer(self, block, planes, num_blocks, dropout_rate, stride):
+        strides = [stride] + [1]*(int(num_blocks)-1)
+        layers = []
+
+        for stride in strides:
+            layers.append(block(self.in_planes, planes, dropout_rate, stride))
+            self.in_planes = planes
+
+        return nn.Sequential(*layers)
+
+    def get_classifier(self):
+        return self.fc
+
+    def reset_classifier(self, num_classes, global_pool='avg'):
+        self.num_classes = num_classes
+        self.global_pool, self.fc = create_classifier(self.num_features, self.num_classes, pool_type=global_pool)
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.layer1(out)
+        out = self.layer2(out)
+        out = self.layer3(out)
+        out = F.relu(self.bn1(out))
+        out = self.global_pool(out)
+        out = out.view(out.size(0), -1)
+        out = self.fc(out)
+
+        return out
 
 def _create_resnet(variant, pretrained=False, **kwargs):
     return build_model_with_cfg(
         ResNet, variant, pretrained,
+        default_cfg=default_cfgs[variant],
+        **kwargs)
+
+def _create_resnet2(variant, pretrained=False, **kwargs):
+    return build_model_with_cfg(
+        ResNet2, variant, pretrained,
         default_cfg=default_cfgs[variant],
         **kwargs)
 
@@ -872,6 +987,16 @@ def wide_resnet101_2(pretrained=False, **kwargs):
     """
     model_args = dict(block=Bottleneck, layers=[3, 4, 23, 3], base_width=128, **kwargs)
     return _create_resnet('wide_resnet101_2', pretrained, **model_args)
+
+@register_model
+def wide_resnet28_10(pretrained=False, **kwargs):
+    """Constructs a Wide ResNet-28-10 model.
+    The model is the same as ResNet except for the bottleneck number of channels
+    which is tenth larger in every block. The number of channels in outer 1x1
+    convolutions is the same.
+    """
+    model_args = dict(depth=28, widen_factor=10, base_width=640, **kwargs)
+    return _create_resnet2('wide_resnet28_10', pretrained, **model_args)
 
 
 @register_model

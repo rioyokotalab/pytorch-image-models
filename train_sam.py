@@ -131,8 +131,8 @@ parser.add_argument('--nbs', type=float, default=0.0, metavar='NBS',
 # Learning rate schedule parameters
 parser.add_argument('--sched', default='step', type=str, metavar='SCHEDULER',
                     help='LR scheduler (default: "step"')
-parser.add_argument('--lr', type=float, default=0.01, metavar='LR',
-                    help='learning rate (default: 0.01)')
+parser.add_argument('--lr', type=float, default=0.1, metavar='LR',
+                    help='learning rate (default: 0.1)')
 parser.add_argument('--lr-noise', type=float, nargs='+', default=None, metavar='pct, pct',
                     help='learning rate noise on/off epoch percentages')
 parser.add_argument('--lr-noise-pct', type=float, default=0.67, metavar='PERCENT',
@@ -351,12 +351,11 @@ def main():
         args.world_size = world_size
         _logger.info('Training in distributed mode with multiple processes, 1 GPU per process. Process %d, total %d.'
                      % (args.global_rank, args.world_size))
-
-    args.experiment = f"{args.experiment}_gbs={args.world_size*args.batch_size}_np={args.world_size}_nbs={args.nbs}"
+    if args.global_rank == 0:
+        args.experiment = f"{args.experiment}_gbs={args.world_size*args.batch_size}_np={args.world_size}_nbs={args.nbs}"
     args.global_batch_size = args.world_size*args.batch_size
     args.local_batch_size = args.batch_size
     args.m = args.world_size
-    args.output = f"/groups1/gcc50533/acc12015ij/trained_models/Vit_deit_224_16_SAM/{args.experiment}"
 
     # resolve AMP arguments based on PyTorch / Apex availability
     use_amp = None
@@ -695,10 +694,6 @@ def train_one_epoch(
     data_time_m = AverageMeter()
     losses_m = AverageMeter()
 
-    if args.fake_separated_loss_log:
-        fake_losses_m = AverageMeter()
-        origin_losses_m = AverageMeter()
-
     model.train()
 
     end = time.time()
@@ -717,7 +712,7 @@ def train_one_epoch(
         # save w_t params
         w_t = []
         for param_group in optimizer.param_groups:
-            w_t.append(param_group['params'])
+            w_t.append([param.clone().detach().requires_grad_(True) for param in param_group['params']])
         optimizer.zero_grad()
 
         # compute output and normal_grad each sam_local_batch without all-reduce normal_grad
