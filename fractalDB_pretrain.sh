@@ -21,15 +21,15 @@ export NGPUS=16
 # batch-size = 1024 / NGPUS
 export NUM_PROC=4
 mpirun -npernode $NUM_PROC -np $NGPUS \
-python train.py /groups/gca50014/imnet/FakeImageNet1k_v1 \
+python fractalDB_pretrain.py /groups/gcd50691/datasets/FractalDB-1k-Gray \
     --model vit_deit_tiny_patch16_224 \
     --opt adamw \
     --batch-size 64 \
     --epochs 300 \
     --cooldown-epochs 0 \
-    --lr 0.001 \
+    --lr 6.0e-4 \
     --sched cosine \
-    --warmup-epochs 5 \
+    --warmup-epochs 10 \
     --weight-decay 0.05 \
     --smoothing 0.1 \
     --drop-path 0.1 \
@@ -38,10 +38,11 @@ python train.py /groups/gca50014/imnet/FakeImageNet1k_v1 \
     --mixup 0.8 \
     --cutmix 1.0 \
     --reprob 0.25 \
+    --remode pixel \
+    --interpolation bicubic \
+    --hflip 0.0 \
+    --eval-metric loss \
     --log-wandb \
     --output train_result \
-    --experiment PreTraining_vit_deit_tiny_patch16_224_fake1k \
+    --experiment PreTraining_vit_deit_tiny_patch16_224_fractalDB_1k_gray \
     -j 8
-
-    # --initial-checkpoint train_result/PreTraining_vit_deit_tiny_patch16_224_1k_2000epochs_2/checkpoint-752.pth.tar \
-    # --start-epoch 753 \
