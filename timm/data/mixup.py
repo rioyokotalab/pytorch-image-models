@@ -277,6 +277,26 @@ class FastCollateMixup(Mixup):
         lam_batch = np.concatenate((lam_batch, lam_batch[::-1]))
         return torch.tensor(lam_batch).unsqueeze(1)
 
+    # for CARS dataset
+    # def _mix_batch_collate(self, output, batch):
+    #     batch_size = len(batch)
+    #     lam, use_cutmix = self._params_per_batch()
+    #     if use_cutmix:
+    #         (yl, yh, xl, xh), lam = cutmix_bbox_and_lam(
+    #             output.shape, lam, ratio_minmax=self.cutmix_minmax, correct_lam=self.correct_lam)
+    #     for i in range(batch_size):
+    #         j = batch_size - i - 1
+    #         mixed = batch[i][0].numpy()
+    #         if lam != 1.:
+    #             if use_cutmix:
+    #                 mixed = mixed.copy()  # don't want to modify the original while iterating
+    #                 mixed[:, yl:yh, xl:xh] = batch[j][0][:, yl:yh, xl:xh]
+    #             else:
+    #                 mixed = mixed.astype(np.float32) * lam + batch[j][0].numpy().astype(np.float32) * (1 - lam)
+    #                 np.rint(mixed, out=mixed)
+    #         output[i] += torch.from_numpy(mixed.astype(np.uint8))
+    #     return lam
+
     def _mix_batch_collate(self, output, batch):
         batch_size = len(batch)
         lam, use_cutmix = self._params_per_batch()

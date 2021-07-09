@@ -18,31 +18,33 @@ module load openmpi/3.1.6 cuda/11.1 cudnn/8.0 nccl/2.7
 export MASTER_ADDR=$(/usr/sbin/ip a show dev bond0 | grep 'inet ' | cut -d " " -f 6 | cut -d "/" -f 1)
 
 export NGPUS=16
-# batch-size = 1024 / NGPUS
+# batch-size = 768 / NGPUS
 export NUM_PROC=4
 mpirun -npernode $NUM_PROC -np $NGPUS \
-python fractalDB_pretrain.py /groups/gcd50691/datasets/FractalDB-1k-Gray \
-    --model vit_deit_base_patch16_224 \
-    --opt adamw \
-    --batch-size 16 \
-    --epochs 300 \
+python train.py ./ \
+    --pretrained \
+    --dataset CARS \
+    --val-split val \
+    --num-classes 196 \
+    --model vit_deit_tiny_patch16_224 \
+    --input-size 3 224 224 \
+    --opt sgd \
+    --batch-size 48 \
+    --epochs 1000 \
     --cooldown-epochs 0 \
-    --lr 1.5e-4 \
+    --lr 0.01 \
     --sched cosine \
-    --warmup-epochs 10 \
-    --weight-decay 0.05 \
+    --warmup-epochs 5 \
+    --weight-decay 0.0001 \
     --smoothing 0.1 \
-    --drop-path 0.1 \
     --aa rand-m9-mstd0.5-inc1 \
     --repeated-aug \
     --mixup 0.8 \
     --cutmix 1.0 \
-    --reprob 0.25 \
-    --remode pixel \
-    --interpolation bicubic \
-    --hflip 0.0 \
-    --eval-metric loss \
     --log-wandb \
     --output train_result \
-    --experiment PreTraining_vit_deit_base_patch16_224_fractalDB_1k_gray_lr_scale \
-    -j 8
+    --experiment finetuning_vit_deit_tiny_patch16_224_1k_to_Cars \
+    -j 4
+
+    # --pretrained-path ./train_result/PreTraining_vit_deit_tiny_patch16_224_fractalDB_1k_gray/model_best.pth.tar \
+    # --experiment finetuning_vit_deit_tiny_patch16_224_fractalDB_1k_gray_to_CIFAR10 \

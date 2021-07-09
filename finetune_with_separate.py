@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """ ImageNet Training Script
+
 This is intended to be a lean and easily modifiable ImageNet training script that reproduces ImageNet
 training results with some of the latest networks and training techniques. It favours canonical PyTorch
 and standard Python style over trying to be able to 'do it all.' That said, it offers quite a few speed
 and training result improvements over the usual PyTorch example scripts. Repurpose as you see fit.
+
 This script was started from an early version of the PyTorch ImageNet example
 (https://github.com/pytorch/examples/tree/master/imagenet)
+
 NVIDIA CUDA specific speedups adopted from NVIDIA Apex examples
 (https://github.com/NVIDIA/apex/tree/master/examples/imagenet)
+
 Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
 """
 import argparse
@@ -228,7 +232,7 @@ parser.add_argument('--bn-eps', type=float, default=None,
                     help='BatchNorm epsilon override (if not None)')
 parser.add_argument('--sync-bn', action='store_true',
                     help='Enable NVIDIA Apex or Torch synchronized BatchNorm.')
-parser.add_argument('--dist-bn', type=str, default='',
+parser.add_argument('--dist-bn', type=str, default="reduce",
                     help='Distribute BatchNorm stats between nodes after each epoch ("broadcast", "reduce", or "")')
 parser.add_argument('--split-bn', action='store_true',
                     help='Enable separate BN layers per augmentation split.')
@@ -296,6 +300,10 @@ parser.add_argument('--dist-backend', default='nccl', type=str,
 parser.add_argument('--device', default=None, type=int,
                     help='GPU id to use.')
 
+# original params
+parser.add_argument('--separate-rate', type=float, default=1.0,
+                    help='Ratio of how much of the sorting task to consider')
+
 def _parse_args():
     # Do we have a config file to parse?
     args_config, remaining = config_parser.parse_known_args()
@@ -316,7 +324,6 @@ def _parse_args():
 def main():
     setup_default_logging()
     args, args_text = _parse_args()
-
     args.prefetcher = not args.no_prefetcher
     args.distributed = True
     if args.device is not None:
@@ -383,7 +390,8 @@ def main():
         bn_eps=args.bn_eps,
         scriptable=args.torchscript,
         checkpoint_path=args.initial_checkpoint,
-        pretrained_path=args.pretrained_path)
+        pretrained_path=args.pretrained_path,
+        separate_flg=True)
     if args.num_classes is None:
         assert hasattr(model, 'num_classes'), 'Model must have `num_classes` attr if not set on cmd line/config.'
         args.num_classes = model.num_classes  # FIXME handle model default vs config num_classes more elegantly
@@ -497,8 +505,6 @@ def main():
         args.data_dir = f'{args.data_dir}/cifar10_data'
     elif args.dataset == 'CIFAR100':
         args.data_dir = f'{args.data_dir}/cifar100_data'
-    elif args.data_dir == 'CARS':
-        args.data_dir = f'{args.data_dir}/cars_data'
     
     # create the train and eval datasets
     dataset_train = create_dataset(
@@ -587,6 +593,7 @@ def main():
     else:
         train_loss_fn = nn.CrossEntropyLoss().cuda()
     validate_loss_fn = nn.CrossEntropyLoss().cuda()
+    label_loss_fn = nn.BCEWithLogitsLoss().cuda()
 
     # setup checkpoint saver and eval metric tracking
     eval_metric = args.eval_metric
@@ -617,7 +624,7 @@ def main():
                 loader_train.sampler.set_epoch(epoch)
 
             train_metrics = train_one_epoch(
-                epoch, model, loader_train, optimizer, train_loss_fn, args,
+                epoch, model, loader_train, optimizer, train_loss_fn, label_loss_fn, args,
                 lr_scheduler=lr_scheduler, saver=saver, output_dir=output_dir,
                 amp_autocast=amp_autocast, loss_scaler=loss_scaler, model_ema=model_ema, mixup_fn=mixup_fn)
 
@@ -626,7 +633,7 @@ def main():
                     _logger.info("Distributing BatchNorm running means and vars")
                 distribute_bn(model, args.world_size, args.dist_bn == 'reduce')
 
-            eval_metrics = validate(model, loader_eval, validate_loss_fn, args, amp_autocast=amp_autocast)
+            eval_metrics = validate(model, loader_eval, validate_loss_fn, label_loss_fn, args, amp_autocast=amp_autocast)
 
             if model_ema is not None and not args.model_ema_force_cpu:
                 if args.distributed and args.dist_bn in ('broadcast', 'reduce'):
@@ -656,13 +663,11 @@ def main():
     except KeyboardInterrupt:
         pass
     if best_metric is not None:
-        if args.global_rank == 0 and args.log_wandb:
-            wandb.log({"best_eval_acc" : best_metric, "best_acc_epoch" : best_epoch})
         _logger.info('*** Best metric: {0} (epoch {1})'.format(best_metric, best_epoch))
 
 
 def train_one_epoch(
-        epoch, model, loader, optimizer, loss_fn, args,
+        epoch, model, loader, optimizer, loss_fn, label_loss_fn, args,
         lr_scheduler=None, saver=None, output_dir=None, amp_autocast=suppress,
         loss_scaler=None, model_ema=None, mixup_fn=None):
 
@@ -675,7 +680,10 @@ def train_one_epoch(
     second_order = hasattr(optimizer, 'is_second_order') and optimizer.is_second_order
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
+    losses_label_m = AverageMeter()
+    losses_class_m = AverageMeter()
     losses_m = AverageMeter()
+    top1_label_m = AverageMeter()
 
     if args.fake_separated_loss_log:
         fake_losses_m = AverageMeter()
@@ -686,47 +694,77 @@ def train_one_epoch(
     end = time.time()
     last_idx = len(loader) - 1
     num_updates = epoch * len(loader)
+    # ここでとってくるローダーを二種類に ここで fake と original をここで input と　target にまーじ　(後回し)
+    # import pdb; pdb.set_trace()
     for batch_idx, (input, target) in enumerate(loader):
         last_batch = batch_idx == last_idx
         data_time_m.update(time.time() - end)
+
+        mixup_active = args.mixup > 0 or args.cutmix > 0. or args.cutmix_minmax is not None
+        if not mixup_active:
+            # mixupがoffの場合，label形式でtargetが入ってくる（mixup系消去，ラベルターゲット）
+            target_label = (target < args.num_classes).to(dtype=torch.float32).unsqueeze(1)
+            target_class = target
+        else:
+            # mixupがonの場合，one-hot形式でtargetが入ってくる
+            target_class = target
+            target_label = torch.sum(target, 1).unsqueeze(1) # realの方を横方法にたす([128, 1000] -> [128, 1]) 1->real, 0->fake
+        
+        
+        # if args.global_rank == 0 and batch_idx%200 == 0:
+        #     print(f"target:{target.shape}")
+        #     print(target)
+        #     print(f"target_label:{target_label.shape}")
+        #     print(target_label)
+
         if not args.prefetcher:
-            input, target = input.cuda(), target.cuda()
+            input, target_class = input.cuda(), target_class.cuda()
             if mixup_fn is not None:
-                input, target = mixup_fn(input, target)
+                input, target_class = mixup_fn(input, target_class)
         if args.channels_last:
             input = input.contiguous(memory_format=torch.channels_last)
 
         with amp_autocast():
-            output = model(input)
+            output, output_label = model(input)
 
-            if args.fake_separated_loss_log:
-                # calc loss splited with [0-999], [1000-1999]
-                target_labels = torch.argmax(target, axis=1).cuda()
-                fake_output = output[target_labels < args.num_classes//2]
-                fake_target = target[target_labels < args.num_classes//2]
-                origin_output = output[target_labels >= args.num_classes//2]
-                origin_target = target[target_labels >= args.num_classes//2]
-                fake_loss = loss_fn(fake_output, fake_target)
-                origin_loss = loss_fn(origin_output, origin_target)
-                if len(fake_target) == 0:
-                    fake_loss = torch.zeros(1, dtype=torch.float32).cuda()
-                if len(origin_target) == 0:
-                    origin_loss = torch.zeros(1, dtype=torch.float32).cuda()
+            # if args.fake_separated_loss_log:
+            #     # calc loss splited with [0-999], [1000-1999]
+            #     target_labels = torch.argmax(target, axis=1).cuda()
+            #     fake_output = output[target_labels < args.num_classes//2]
+            #     fake_target = target[target_labels < args.num_classes//2]
+            #     origin_output = output[target_labels >= args.num_classes//2]
+            #     origin_target = target[target_labels >= args.num_classes//2]
+            #     fake_loss = loss_fn(fake_output, fake_target)
+            #     origin_loss = loss_fn(origin_output, origin_target)
+            #     if len(fake_target) == 0:
+            #         fake_loss = torch.zeros(1, dtype=torch.float32).cuda()
+            #     if len(origin_target) == 0:
+            #         origin_loss = torch.zeros(1, dtype=torch.float32).cuda()
 
-                if args.global_rank == 0 and (last_batch or batch_idx % args.log_interval == 0):
-                    print(f'fake_target_shape: {fake_target.shape}, origin_target_shape: {origin_target.shape}')
-                    print(f'fake_loss: {fake_loss}, origin_loss: {origin_loss}')
+            #     if args.global_rank == 0 and (last_batch or batch_idx % args.log_interval == 0):
+            #         print(f'fake_target_shape: {fake_target.shape}, origin_target_shape: {origin_target.shape}')
+            #         print(f'fake_loss: {fake_loss}, origin_loss: {origin_loss}')
             
-            loss = loss_fn(output, target)
+            loss_class = loss_fn(output, target_class)
+            loss_label = label_loss_fn(output_label, target_label)
+            # batch size 混ぜるときに気を付ける
+            # loss = (loss_class + loss_label)/2
+            # args.separate_rate = 1.0 の時，クラス分類タスクとfake判別タスクを毎回同等の価値とみなしてバックワードを回す．0.5なら，fake判別タスクの価値はクラス分類タスクの価値の半分
+            # rate_loss = (loss_class/loss_label).item()
+            loss = (loss_class + 0*loss_label)
+            acc1_label = accuracy_label(output_label, target_label)
 
         if not args.distributed:
             losses_m.update(loss.item(), input.size(0))
+            losses_class_m.update(loss_class.item(), input.size(0))
+            losses_label_m.update(loss_label.item(), input.size(0))
+            top1_label_m.update(acc1_label.item(), output.size(0))
 
-            if args.fake_separated_loss_log:
-                if len(fake_target) > 0:
-                    fake_losses_m.update(fake_loss.item(), len(fake_target))
-                if len(origin_target) > 0:
-                    origin_losses_m.update(origin_loss.item(), len(origin_target))
+            # if args.fake_separated_loss_log:
+            #     if len(fake_target) > 0:
+            #         fake_losses_m.update(fake_loss.item(), len(fake_target))
+            #     if len(origin_target) > 0:
+            #         origin_losses_m.update(origin_loss.item(), len(origin_target))
 
         optimizer.zero_grad()
         if loss_scaler is not None:
@@ -750,23 +788,29 @@ def train_one_epoch(
 
         if args.distributed:
             reduced_loss = reduce_tensor(loss.data, args.world_size)
+            reduced_loss_class = reduce_tensor(loss_class.data, args.world_size)
+            reduced_loss_label = reduce_tensor(loss_label.data, args.world_size)
+            acc1_label = reduce_tensor(acc1_label, args.world_size)
             losses_m.update(reduced_loss.item(), input.size(0))
+            losses_class_m.update(reduced_loss_class.item(), input.size(0))
+            losses_label_m.update(reduced_loss_label.item(), input.size(0))
+            top1_label_m.update(acc1_label.item(), output.size(0))
 
-            if args.fake_separated_loss_log:
-                # len(fake_target)やlen(origin_target)を全プロセスで足し合わせて考慮する必要あり
-                fake_local_sum_loss = torch.tensor([len(fake_target)*fake_loss.item()], dtype=torch.float32).cuda()
-                dist.all_reduce(fake_local_sum_loss.data, op=dist.ReduceOp.SUM)
-                fake_nums = torch.tensor([len(fake_target)], dtype=torch.int64).cuda()
-                dist.all_reduce(fake_nums.data, op=dist.ReduceOp.SUM)
-                if fake_nums.item() > 0:
-                    fake_losses_m.update(fake_local_sum_loss.item()/fake_nums.item(), fake_nums.item())
+            # if args.fake_separated_loss_log:
+            #     # len(fake_target)やlen(origin_target)を全プロセスで足し合わせて考慮する必要あり
+            #     fake_local_sum_loss = torch.tensor([len(fake_target)*fake_loss.item()], dtype=torch.float32).cuda()
+            #     dist.all_reduce(fake_local_sum_loss.data, op=dist.ReduceOp.SUM)
+            #     fake_nums = torch.tensor([len(fake_target)], dtype=torch.int64).cuda()
+            #     dist.all_reduce(fake_nums.data, op=dist.ReduceOp.SUM)
+            #     if fake_nums.item() > 0:
+            #         fake_losses_m.update(fake_local_sum_loss.item()/fake_nums.item(), fake_nums.item())
                 
-                origin_local_sum_loss = torch.tensor([len(origin_target)*origin_loss.item()], dtype=torch.float32).cuda()
-                dist.all_reduce(origin_local_sum_loss.data, op=dist.ReduceOp.SUM)
-                origin_nums = torch.tensor([len(origin_target)], dtype=torch.int64).cuda()
-                dist.all_reduce(origin_nums.data, op=dist.ReduceOp.SUM)
-                if origin_nums.item() > 0:
-                    origin_losses_m.update(origin_local_sum_loss.item()/origin_nums.item(), origin_nums.item())
+            #     origin_local_sum_loss = torch.tensor([len(origin_target)*origin_loss.item()], dtype=torch.float32).cuda()
+            #     dist.all_reduce(origin_local_sum_loss.data, op=dist.ReduceOp.SUM)
+            #     origin_nums = torch.tensor([len(origin_target)], dtype=torch.int64).cuda()
+            #     dist.all_reduce(origin_nums.data, op=dist.ReduceOp.SUM)
+            #     if origin_nums.item() > 0:
+            #         origin_losses_m.update(origin_local_sum_loss.item()/origin_nums.item(), origin_nums.item())
 
         num_updates += 1
         batch_time_m.update(time.time() - end)
@@ -778,6 +822,9 @@ def train_one_epoch(
                 _logger.info(
                     'Train: {} [{:>4d}/{} ({:>3.0f}%)]  '
                     'Loss: {loss.val:>9.6f} ({loss.avg:>6.4f})  '
+                    'Loss_Class: {loss_class.val:>7.4f} ({loss_class.avg:>6.4f})  '
+                    'Loss_Label: {loss_label.val:>7.4f} ({loss_label.avg:>6.4f})  '
+                    'Acc@label: {top1_label.val:>7.4f} ({top1_label.avg:>7.4f})  '
                     'Time: {batch_time.val:.3f}s, {rate:>7.2f}/s  '
                     '({batch_time.avg:.3f}s, {rate_avg:>7.2f}/s)  '
                     'LR: {lr:.3e}  '
@@ -786,6 +833,9 @@ def train_one_epoch(
                         batch_idx, len(loader),
                         100. * batch_idx / last_idx,
                         loss=losses_m,
+                        loss_class=losses_class_m,
+                        loss_label=losses_label_m, 
+                        top1_label=top1_label_m,
                         batch_time=batch_time_m,
                         rate=input.size(0) * args.world_size / batch_time_m.val,
                         rate_avg=input.size(0) * args.world_size / batch_time_m.avg,
@@ -815,14 +865,16 @@ def train_one_epoch(
     if args.fake_separated_loss_log:
         return OrderedDict([('loss', losses_m.avg), ('fake_loss', fake_losses_m.avg), ('origin_loss', origin_losses_m.avg)])
     else:
-        return OrderedDict([('loss', losses_m.avg)])
+        return OrderedDict([('loss', losses_m.avg), ('loss_class', losses_class_m.avg), ('loss_label', losses_label_m.avg), ('top1_label', top1_label_m.avg)])
 
 
-def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix=''):
+def validate(model, loader, loss_fn, label_loss_fn, args, amp_autocast=suppress, log_suffix=''):
     batch_time_m = AverageMeter()
-    losses_m = AverageMeter()
+    losses_class_m = AverageMeter()
+    losses_label_m = AverageMeter()
     top1_m = AverageMeter()
     top5_m = AverageMeter()
+    top1_label_m = AverageMeter()
 
     model.eval()
 
@@ -837,8 +889,17 @@ def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='')
             if args.channels_last:
                 input = input.contiguous(memory_format=torch.channels_last)
 
+            target_label = (target < args.num_classes).to(dtype=torch.float32).unsqueeze(1)
+            target_class = target
+
+            # if args.global_rank == 0 and batch_idx == 0:
+            #     print(f"target:{target_class.shape}")
+            #     print(target_class)
+            #     print(f"target_label:{target_label.shape}")
+            #     print(target_label)
+
             with amp_autocast():
-                output = model(input)
+                output, output_label = model(input)
             if isinstance(output, (tuple, list)):
                 output = output[0]
 
@@ -846,23 +907,32 @@ def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='')
             reduce_factor = args.tta
             if reduce_factor > 1:
                 output = output.unfold(0, reduce_factor, reduce_factor).mean(dim=2)
-                target = target[0:target.size(0):reduce_factor]
+                output_label = output_label.unfold(0, reduce_factor, reduce_factor).mean(dim=2)
+                target_class = target_class[0:target.size(0):reduce_factor]
+                target_label = target_label[0:target_label.size(0):reduce_factor]
 
-            loss = loss_fn(output, target)
-            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+            loss_class = loss_fn(output, target_class)
+            loss_label = label_loss_fn(output_label, target_label)
+            acc1, acc5 = accuracy(output, target_class, topk=(1, 5))
+            acc1_label = accuracy_label(output_label, target_label)
 
             if args.distributed:
-                reduced_loss = reduce_tensor(loss.data, args.world_size)
+                reduced_loss_class = reduce_tensor(loss_class.data, args.world_size)
+                reduced_loss_label = reduce_tensor(loss_label.data, args.world_size)
                 acc1 = reduce_tensor(acc1, args.world_size)
                 acc5 = reduce_tensor(acc5, args.world_size)
+                acc1_label = reduce_tensor(acc1_label, args.world_size)
             else:
-                reduced_loss = loss.data
+                reduced_loss_class = loss_class.data
+                reduced_loss_label = loss_label.data
 
             torch.cuda.synchronize()
 
-            losses_m.update(reduced_loss.item(), input.size(0))
+            losses_class_m.update(reduced_loss_class.item(), input.size(0))
+            losses_label_m.update(reduced_loss_label.item(), input.size(0))
             top1_m.update(acc1.item(), output.size(0))
             top5_m.update(acc5.item(), output.size(0))
+            top1_label_m.update(acc1_label.item(), output.size(0))
 
             batch_time_m.update(time.time() - end)
             end = time.time()
@@ -871,13 +941,15 @@ def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='')
                 _logger.info(
                     '{0}: [{1:>4d}/{2}]  '
                     'Time: {batch_time.val:.3f} ({batch_time.avg:.3f})  '
-                    'Loss: {loss.val:>7.4f} ({loss.avg:>6.4f})  '
+                    'Loss_Class: {loss_class.val:>7.4f} ({loss_class.avg:>6.4f})  '
+                    'Loss_Label: {loss_label.val:>7.4f} ({loss_label.avg:>6.4f})  '
                     'Acc@1: {top1.val:>7.4f} ({top1.avg:>7.4f})  '
-                    'Acc@5: {top5.val:>7.4f} ({top5.avg:>7.4f})'.format(
+                    'Acc@5: {top5.val:>7.4f} ({top5.avg:>7.4f})  '
+                    'Acc@label: {top1_label.val:>7.4f} ({top1_label.avg:>7.4f})'.format(
                         log_name, batch_idx, last_idx, batch_time=batch_time_m,
-                        loss=losses_m, top1=top1_m, top5=top5_m))
+                        loss_class=losses_class_m, loss_label=losses_label_m, top1=top1_m, top5=top5_m, top1_label=top1_label_m))
 
-    metrics = OrderedDict([('loss', losses_m.avg), ('top1', top1_m.avg), ('top5', top5_m.avg)])
+    metrics = OrderedDict([('loss_class', losses_class_m.avg), ('loss_label', losses_label_m.avg), ('top1', top1_m.avg), ('top5', top5_m.avg), ('top1_label', top1_label_m.avg)])
 
     return metrics
 
