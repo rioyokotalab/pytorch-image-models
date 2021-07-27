@@ -12,74 +12,62 @@ import torchvision.datasets as datasets
 from .dataset import IterableImageDataset, ImageDataset
 
 
-class CarsDataset(Dataset):
-    """
-        Cars Dataset
-    """
-    def __init__(self, mode, data_dir, metas, limit=None):
+# class CarsDataset(Dataset):
+#     """
+#         Cars Dataset
+#     """
+#     def __init__(self, mode, data_dir, metas, limit=None):
 
-        self.data_dir = data_dir
-        self.data = []
-        self.target = []
+#         self.data_dir = data_dir
+#         self.data = []
+#         self.target = []
 
-        self.to_tensor = transforms.ToTensor()
-        self.mode = mode
+#         self.to_tensor = transforms.ToTensor()
+#         self.mode = mode
 
-        if not isinstance(metas, str):
-            raise Exception("Train metas must be string location !")
-        labels_meta = mat_io.loadmat(metas)
+#         if not isinstance(metas, str):
+#             raise Exception("Train metas must be string location !")
+#         labels_meta = mat_io.loadmat(metas)
 
-        for idx, img_ in enumerate(labels_meta['annotations'][0]):
-            if limit:
-                if idx > limit:
-                    break
+#         for idx, img_ in enumerate(labels_meta['annotations'][0]):
+#             if limit:
+#                 if idx > limit:
+#                     break
 
-            # self.data.append(img_resized)
-            self.data.append(data_dir + img_[-1][0])
-            # if self.mode == 'train':
-            self.target.append(img_[-2][0][0])
-            # if not mode and idx < 3:
-            #     print(img_[-2][0][0])
-            #     print(img_)
-            # else:
-            #     import sys
-            #     sys.exit()
+#             # self.data.append(img_resized)
+#             self.data.append(data_dir + img_[-1][0])
+#             # if self.mode == 'train':
+#             self.target.append(img_[-2][0][0])
+#             # if not self.mode and idx < 3:
+#             #     print(img_[-2][0][0])
+#             #     print(img_)
+#             # else:
+#             #     import sys
+#             #     sys.exit()
+        
+#         self.train_transform = transforms.Compose([transforms.ToTensor()])
+#         self.val_or_test_transform = transforms.Compose([transforms.ToTensor()])
 
-        if self.mode:
-            self.train_transform = transforms.Compose([
-                transforms.Resize(250),
-                transforms.RandomResizedCrop(224),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.4706145, 0.46000465, 0.45479808], std=[0.26668432, 0.26578658, 0.2706199])
-            ])
-        self.val_or_test_transform = transforms.Compose([
-            transforms.Resize(224),
-            transforms.RandomResizedCrop(224),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.46905602, 0.45872932, 0.4539325], std=[0.26603131, 0.26460057, 0.26935185])
-        ])
+#     def __getitem__(self, idx):
 
-    def __getitem__(self, idx):
+#         try:
+#             image = io.imread(self.data[idx])
+#         except Exception as e:
+#             print(f"error occured. error type : {e}")
+#             print(f"file : {self.data[idx]}")
 
-        try:
-            image = io.imread(self.data[idx])
-        except Exception as e:
-            print(f"error occured. error type : {e}")
-            print(f"file : {self.data[idx]}")
+#         if len(image.shape) == 2:  # this is gray image
+#             image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
 
-        if len(image.shape) == 2:  # this is gray image
-            image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+#         img = Image.fromarray(image)
+#         img_resized = cv2.resize(img, (-1, -1), interpolation=cv2.INTER_CUBIC)
+#         if self.mode:
+#             return self.train_transform(img), torch.tensor(self.target[idx]-1, dtype=torch.long)
+#         else:
+#             return self.val_or_test_transform(img), torch.tensor(self.target[idx]-1, dtype=torch.long)
 
-        img = Image.fromarray(image)
-        # img_resized = cv2.resize(image, (self.resize_width, self.resize_height), interpolation=cv2.INTER_CUBIC)
-        if self.mode:
-            return self.train_transform(img), torch.tensor(self.target[idx]-1, dtype=torch.long)
-        else:
-            return self.val_or_test_transform(img), torch.tensor(self.target[idx]-1, dtype=torch.long)
-
-    def __len__(self):
-        return len(self.data)
+#     def __len__(self):
+#         return len(self.data)
 
 
 def _search_split(root, split):
@@ -131,11 +119,11 @@ def create_dataset(name, root, split='validation', search_split=True, is_trainin
             download=True
         )
     elif name == 'cars':
-        root_dir = f'./cars_data/{split}/'
-        metas = f'./cars_data/cars_train_annos.mat'
+        root_dir = f'/groups/gcd50691/datasets/stanford_cars/train/extracted/'
         if not is_training:
-            metas = f'./cars_data/cars_test_annos_withlabels.mat'
-        ds = CarsDataset(is_training, root_dir, metas)
+            root_dir = f'/groups/gcd50691/datasets/stanford_cars/test/extracted/'
+        kwargs.pop('repeats', 0)  # FIXME currently only Iterable dataset support the repeat multiplier
+        ds = ImageDataset(root_dir, parser=name, **kwargs)
     elif name.startswith('tfds'):
         ds = IterableImageDataset(
             root, parser=name, split=split, is_training=is_training, batch_size=batch_size, **kwargs)

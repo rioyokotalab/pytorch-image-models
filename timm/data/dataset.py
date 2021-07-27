@@ -6,7 +6,7 @@ import torch.utils.data as data
 import os
 import torch
 import logging
-
+from scipy import io as mat_io
 from PIL import Image
 
 from .parsers import create_parser
@@ -144,3 +144,74 @@ class AugMixDataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.dataset)
+
+
+# class CarsDataset(data.Dataset):
+#     """
+#         Cars Dataset
+#     """
+#     def __init__(
+#             self,
+#             mode,
+#             data_dir,
+#             metas,
+#             limit=None,
+#             parser=None,
+#             class_map='',
+#             load_bytes=False,
+#             transform=None,
+#     ):
+#         self.data_dir = data_dir
+#         self.data = []
+#         self.target = []
+#         self.mode = mode
+#         self.parser = parser
+#         self.class_map = class_map
+#         self.load_bytes = load_bytes
+#         self._consecutive_errors = 0
+#         self.transform = transform
+
+#         if not isinstance(metas, str):
+#             raise Exception("Train metas must be string location !")
+#         labels_meta = mat_io.loadmat(metas)
+
+#         for index, img_ in enumerate(labels_meta['annotations'][0]):
+#             if limit:
+#                 if index > limit:
+#                     break
+
+#             # self.data.append(img_resized)
+#             self.data.append(data_dir + img_[-1][0])
+#             # if self.mode == 'train':
+#             self.target.append(img_[-2][0][0])
+#             # if not self.mode and index < 3:
+#             #     print(img_[-2][0][0])
+#             #     print(img_)
+#             # else:
+#             #     import sys
+#             #     sys.exit()
+
+#     def __getitem__(self, index):
+
+#         img, target = self.data[index], self.target[index]-1
+#         try:
+#             img = img.read() if self.load_bytes else Image.open(img).convert('RGB')
+#         except Exception as e:
+#             _logger.warning(f'Skipped sample (index {index}, file {self.data[index]}). {str(e)}')
+#             self._consecutive_errors += 1
+#             if self._consecutive_errors < _ERROR_RETRY:
+#                 return self.__getitem__((index + 1) % len(self.data))
+#             else:
+#                 raise e
+#         self._consecutive_errors = 0
+#         if self.transform is not None:
+#             img = self.transform(img)
+#         if target is None:
+#             target = torch.tensor(-1, dtype=torch.long)
+#         return img, target
+
+#     def __len__(self):
+#         return len(self.data)
+
+#     def filename(self, index, basename=False, absolute=False):
+#         return self.data[index]

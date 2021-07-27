@@ -162,7 +162,7 @@ def load_original_pretrained(model, state_dict, num_classes=1000, strict=True, d
     if classifiers is not None:
         if isinstance(classifiers, str):
             classifiers = (classifiers,)
-        if num_classes != default_cfg['num_classes']:
+        if num_classes != 1:
             for classifier_name in classifiers:
                 # completely discard fully connected if model num_classes doesn't match pretrained weights
                 del state_dict[classifier_name + '.weight']
