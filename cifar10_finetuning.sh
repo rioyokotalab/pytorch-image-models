@@ -1,22 +1,35 @@
 #!/bin/bash
-#YBATCH -r am_8
-#SBATCH -N 1
-#SBATCH -J vit_finetuning_224_fake_1k_to_CIFAR10
-#SBATCH --output output/%j.out
+#$ -cwd
+#$ -l rt_F=4
+#$ -l h_rt=72:00:00
+#$ -j y
+#$ -o output/o.$JOB_ID
 
-. /etc/profile.d/modules.sh
-module load openmpi/3.1.6 cuda/11.1 cudnn/cuda-11.1/8.0
+# ======== Pyenv/ ========
+export PYENV_ROOT=$HOME/.pyenv
+export PATH=$PYENV_ROOT/bin:$PATH
+eval "$(pyenv init -)"
 
-export NUM_PROC=8
-python -m torch.distributed.launch --nproc_per_node=$NUM_PROC train.py ./ \
+# ======== Modules ========
+source /etc/profile.d/modules.sh
+module load openmpi/3.1.6 cuda/11.1 cudnn/8.0 nccl/2.7
+
+# export MASTER_ADDR=$(/usr/sbin/ip a show dev bond0 | grep inet | cut -d " " -f 6 | cut -d "/" -f 1)
+export MASTER_ADDR=$(/usr/sbin/ip a show dev bond0 | grep 'inet ' | cut -d " " -f 6 | cut -d "/" -f 1)
+
+export NGPUS=16
+# batch-size = 768 / NGPUS
+export NUM_PROC=4
+mpirun -npernode $NUM_PROC -np $NGPUS \
+python train.py ./ \
     --pretrained \
-    --pretrained-path ./train_result/PreTraining_vit_deit_base_patch16_224_fake_1k/model_best.pth.tar \
+    --pretrained-path /groups1/gcc50533/acc12015ij/train_result/PreTraining_vit_deit_tiny_patch16_224_21k_bs=64_128_epochs=30/model_best.pth.tar \
     --dataset CIFAR10 \
     --num-classes 10 \
-    --model vit_deit_base_patch16_224 \
+    --model vit_deit_tiny_patch16_224 \
     --input-size 3 224 224 \
     --opt sgd \
-    --batch-size 96 \
+    --batch-size 48 \
     --epochs 1000 \
     --cooldown-epochs 0 \
     --lr 0.01 \
@@ -29,7 +42,6 @@ python -m torch.distributed.launch --nproc_per_node=$NUM_PROC train.py ./ \
     --mixup 0.8 \
     --cutmix 1.0 \
     --log-wandb \
-    --output train_result \
-    --experiment finetuning_vit_deit_base_patch16_224_fake_1k_to_CIFAR10 \
-    -j 8
-
+    --output /groups1/gcc50533/acc12015ij/train_result \
+    --experiment finetuning_vit_deit_tiny_patch16_224_21k_bs=64_128_epochs=30_to_CIFAR10 \
+    -j 4

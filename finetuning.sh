@@ -21,27 +21,28 @@ export NGPUS=16
 # batch-size = 1024 / NGPUS
 export NUM_PROC=4
 mpirun -npernode $NUM_PROC -np $NGPUS \
-python train.py ./ \
+python train.py /groups/gca50014/imnet/ILSVRC2012 \
     --pretrained \
-    --pretrained-path ./train_result/PreTraining_vit_deit_tiny_patch16_224_fake_1k_v2/model_best.pth.tar \
-    --dataset CIFAR10 \
-    --num-classes 10 \
+    --pretrained-path /groups1/gcc50533/acc12015ij/train_result/PreTraining_vit_deit_tiny_patch16_224_21k_bs=64_128_epochs=30/model_best.pth.tar \
+    --num-classes 1000 \
     --model vit_deit_tiny_patch16_224 \
     --input-size 3 224 224 \
-    --opt sgd \
-    --batch-size 48 \
-    --epochs 1000 \
+    --opt adamw \
+    --batch-size 64 \
+    --epochs 300 \
     --cooldown-epochs 0 \
-    --lr 0.01 \
+    --lr 0.001 \
     --sched cosine \
     --warmup-epochs 5 \
-    --weight-decay 0.0001 \
+    --weight-decay 0.05 \
     --smoothing 0.1 \
+    --drop-path 0.1 \
     --aa rand-m9-mstd0.5-inc1 \
     --repeated-aug \
     --mixup 0.8 \
     --cutmix 1.0 \
+    --reprob 0.25 \
     --log-wandb \
-    --output train_result \
-    --experiment finetuning_vit_deit_tiny_patch16_224_1k_v2_to_CIFAR10 \
+    --output /groups1/gcc50533/acc12015ij/train_result \
+    --experiment finetuning_vit_deit_tiny_patch16_224_21k_bs=64_128_epochs=30_to_1k \
     -j 4

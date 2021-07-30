@@ -21,13 +21,13 @@ export NGPUS=128
 export NUM_PROC=4
 mpirun -npernode $NUM_PROC -np $NGPUS \
 python fractalDB_pretrain.py /groups/gcd50691/datasets/FractalDB-10k-Color \
-    --model vit_deit_base_patch16_224 \
+    --model vit_deit_tiny_patch16_224 \
     --num-classes 10000 \
     --opt adamw \
     --batch-size 64 \
-    --epochs 50 \
+    --epochs 30 \
     --cooldown-epochs 0 \
-    --lr 2.0e-3 \
+    --lr 8.0e-3 \
     --sched cosine \
     --warmup-epochs 5 \
     --weight-decay 0.05 \
@@ -44,5 +44,5 @@ python fractalDB_pretrain.py /groups/gcd50691/datasets/FractalDB-10k-Color \
     --eval-metric loss \
     --log-wandb \
     --output /groups1/gcc50533/acc12015ij/train_result \
-    --experiment PreTraining_vit_deit_base_patch16_224_fractalDB_10k_color_bs=64_128_lr=as_16_128 \
+    --experiment PreTraining_vit_deit_tiny_patch16_224_fractalDB_10k_color_bs=64_128_epochs=30 \
     -j 4
