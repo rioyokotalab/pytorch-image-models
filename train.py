@@ -813,9 +813,9 @@ def train_one_epoch(
         optimizer.sync_lookahead()
     
     if args.fake_separated_loss_log:
-        return OrderedDict([('loss', losses_m.avg), ('fake_loss', fake_losses_m.avg), ('origin_loss', origin_losses_m.avg)])
+        return OrderedDict([('loss', losses_m.avg), ('fake_loss', fake_losses_m.avg), ('origin_loss', origin_losses_m.avg), ('lr', lr)])
     else:
-        return OrderedDict([('loss', losses_m.avg)])
+        return OrderedDict([('loss', losses_m.avg), ('lr', lr)])
 
 
 def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix=''):
