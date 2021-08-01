@@ -23,6 +23,38 @@ I'm fortunate to be able to dedicate significant time and money of my own suppor
 
 ## What's New
 
+### July 12, 2021
+* Add XCiT models from [official facebook impl](https://github.com/facebookresearch/xcit). Contributed by [Alexander Soare](https://github.com/alexander-soare)
+
+### July 5-9, 2021
+* Add `efficientnetv2_rw_t` weights, a custom 'tiny' 13.6M param variant that is a bit better than (non NoisyStudent) B3 models. Both faster and better accuracy (at same or lower res)
+  * top-1 82.34 @ 288x288 and 82.54 @ 320x320
+* Add [SAM pretrained](https://arxiv.org/abs/2106.01548) in1k weight for ViT B/16 (`vit_base_patch16_sam_224`) and B/32 (`vit_base_patch32_sam_224`)  models.
+* Add 'Aggregating Nested Transformer' (NesT) w/ weights converted from official [Flax impl](https://github.com/google-research/nested-transformer). Contributed by [Alexander Soare](https://github.com/alexander-soare).
+  * `jx_nest_base` - 83.534, `jx_nest_small` - 83.120, `jx_nest_tiny` - 81.426
+
+### June 23, 2021
+* Reproduce gMLP model training, `gmlp_s16_224` trained to 79.6 top-1, matching [paper](https://arxiv.org/abs/2105.08050). Hparams for this and other recent MLP training [here](https://gist.github.com/rwightman/d6c264a9001f9167e06c209f630b2cc6)
+
+### June 20, 2021
+* Release Vision Transformer 'AugReg' weights from [How to train your ViT? Data, Augmentation, and Regularization in Vision Transformers](https://arxiv.org/abs/2106.10270)
+  * .npz weight loading support added, can load any of the 50K+ weights from the [AugReg series](https://console.cloud.google.com/storage/browser/vit_models/augreg)
+  * See [example notebook](https://colab.research.google.com/github/google-research/vision_transformer/blob/master/vit_jax_augreg.ipynb) from [official impl](https://github.com/google-research/vision_transformer/) for navigating the augreg weights
+  * Replaced all default weights w/ best AugReg variant (if possible). All AugReg 21k classifiers work.
+    * Highlights: `vit_large_patch16_384` (87.1 top-1), `vit_large_r50_s32_384` (86.2 top-1), `vit_base_patch16_384` (86.0 top-1)
+  * `vit_deit_*` renamed to just `deit_*`
+  * Remove my old small model, replace with DeiT compatible small w/ AugReg weights
+* Add 1st training of my `gmixer_24_224` MLP /w GLU, 78.1 top-1 w/ 25M params.
+* Add weights from official ResMLP release (https://github.com/facebookresearch/deit)
+* Add `eca_nfnet_l2` weights from my 'lightweight' series. 84.7 top-1 at 384x384.
+* Add distilled BiT 50x1 student and 152x2 Teacher weights from  [Knowledge distillation: A good teacher is patient and consistent](https://arxiv.org/abs/2106.05237)
+* NFNets and ResNetV2-BiT models work w/ Pytorch XLA now
+  * weight standardization uses F.batch_norm instead of std_mean (std_mean wasn't lowered)
+  * eps values adjusted, will be slight differences but should be quite close
+* Improve test coverage and classifier interface of non-conv (vision transformer and mlp) models
+* Cleanup a few classifier / flatten details for models w/ conv classifiers or early global pool
+* Please report any regressions, this PR touched quite a few models.
+
 ### June 8, 2021
 * Add first ResMLP weights, trained in PyTorch XLA on TPU-VM w/ my XLA branch. 24 block variant, 79.2 top-1.
 * Add ResNet51-Q model w/ pretrained weights at 82.36 top-1.
@@ -182,6 +214,7 @@ All model architecture families include variants with pretrained weights. There 
 
 A full version of the list below with source links can be found in the [documentation](https://rwightman.github.io/pytorch-image-models/models/).
 
+* Aggregating Nested Transformers - https://arxiv.org/abs/2105.12723
 * Big Transfer ResNetV2 (BiT) - https://arxiv.org/abs/1912.11370
 * Bottleneck Transformers - https://arxiv.org/abs/2101.11605
 * CaiT (Class-Attention in Image Transformers) - https://arxiv.org/abs/2103.17239
@@ -246,6 +279,7 @@ A full version of the list below with source links can be found in the [document
 * Xception - https://arxiv.org/abs/1610.02357
 * Xception (Modified Aligned, Gluon) - https://arxiv.org/abs/1802.02611
 * Xception (Modified Aligned, TF) - https://arxiv.org/abs/1802.02611
+* XCiT (Cross-Covariance Image Transformers) - https://arxiv.org/abs/2106.09681
 
 ## Features
 
@@ -354,7 +388,7 @@ One of the greatest assets of PyTorch is the community and their contributions. 
 The code here is licensed Apache 2.0. I've taken care to make sure any third party code included or adapted has compatible (permissive) licenses such as MIT, BSD, etc. I've made an effort to avoid any GPL / LGPL conflicts. That said, it is your responsibility to ensure you comply with licenses here and conditions of any dependent licenses. Where applicable, I've linked the sources/references for various components in docstrings. If you think I've missed anything please create an issue.
 
 ### Pretrained Weights
-So far all of the pretrained weights available here are pretrained on ImageNet with a select few that have some additional pretraining (see extra note below). ImageNet was released for non-commercial research purposes only (http://www.image-net.org/download-faq). It's not clear what the implications of that are for the use of pretrained weights from that dataset. Any models I have trained with ImageNet are done for research purposes and one should assume that the original dataset license applies to the weights. It's best to seek legal advice if you intend to use the pretrained weights in a commercial product.
+So far all of the pretrained weights available here are pretrained on ImageNet with a select few that have some additional pretraining (see extra note below). ImageNet was released for non-commercial research purposes only (https://image-net.org/download). It's not clear what the implications of that are for the use of pretrained weights from that dataset. Any models I have trained with ImageNet are done for research purposes and one should assume that the original dataset license applies to the weights. It's best to seek legal advice if you intend to use the pretrained weights in a commercial product.
 
 #### Pretrained on more than ImageNet
 Several weights included or references here were pretrained with proprietary datasets that I do not have access to. These include the Facebook WSL, SSL, SWSL ResNe(Xt) and the Google Noisy Student EfficientNet models. The Facebook models have an explicit non-commercial license (CC-BY-NC 4.0, https://github.com/facebookresearch/semi-supervised-ImageNet1K-models, https://github.com/facebookresearch/WSL-Images). The Google models do not appear to have any restriction beyond the Apache 2.0 license (and ImageNet concerns). In either case, you should contact Facebook or Google with any questions.
@@ -363,7 +397,7 @@ Several weights included or references here were pretrained with proprietary dat
 
 ### BibTeX
 
-```
+```bibtex
 @misc{rw2019timm,
   author = {Ross Wightman},
   title = {PyTorch Image Models},
