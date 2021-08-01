@@ -14,7 +14,7 @@ from .constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from .distributed_sampler import OrderedDistributedSampler
 from .random_erasing import RandomErasing
 from .mixup import FastCollateMixup
-from .samplers import RASampler
+from .samplers import RASampler, RASamplerSplit
 
 
 def fast_collate(batch):

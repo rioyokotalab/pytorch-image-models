@@ -40,22 +40,15 @@ class RASampler(torch.utils.data.Sampler):
             indices = torch.randperm(len(self.dataset), generator=g).tolist()
         else:
             indices = list(range(len(self.dataset)))
-        if self.rank == 0:
-            print(len(self.dataset), len(indices))
 
         # add extra samples to make it evenly divisible
         indices = [ele for ele in indices for i in range(3)]
         indices += indices[:(self.total_size - len(indices))]
         assert len(indices) == self.total_size
-        if self.rank == 0:
-            print(self.total_size, len(indices))
 
         # subsample
         indices = indices[self.rank:self.total_size:self.num_replicas]
         assert len(indices) == self.num_samples
-        if self.rank == 0:
-            print(self.num_samples, len(indices))
-            print(self.num_selected_samples)
 
         return iter(indices[:self.num_selected_samples])
 
@@ -67,12 +60,6 @@ class RASampler(torch.utils.data.Sampler):
 
 
 class RASamplerSplit(RASampler):
-    """Sampler that restricts data loading to a subset of the dataset for distributed,
-    with repeated augmentation.
-    It ensures that different each augmented version of a sample will be visible to a
-    different process (GPU)
-    Heavily based on torch.utils.data.DistributedSampler
-    """
 
     def __init__(self, dataset, batch_size, num_replicas=None, rank=None, shuffle=True):
         super(RASamplerSplit, self).__init__(dataset, num_replicas, rank, shuffle)
@@ -88,11 +75,11 @@ class RASamplerSplit(RASampler):
         # add extra samples to make it evenly divisible
         indices = [ele for ele in indices for i in range(3)]
         indices += indices[:(self.total_size // 2 - len(indices))]
-        assert len(indices) == self.total_size // 2
+        # assert len(indices) == self.total_size // 2
 
         # subsample
         indices = indices[self.rank:self.total_size // 2:self.num_replicas]
-        assert len(indices) == self.num_samples // 2
+        # assert len(indices) == self.num_samples // 2
 
         # implement samples with real images
         size = self.batch_size // 2

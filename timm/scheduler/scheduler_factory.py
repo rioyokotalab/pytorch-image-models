@@ -7,7 +7,7 @@ from .step_lr import StepLRScheduler
 from .plateau_lr import PlateauLRScheduler
 
 
-def create_scheduler(args, optimizer):
+def create_scheduler(args, optimizer, iter_per_epoch):
     num_epochs = args.epochs
 
     if getattr(args, 'lr_noise', None) is not None:
@@ -83,5 +83,22 @@ def create_scheduler(args, optimizer):
             noise_std=getattr(args, 'lr_noise_std', 1.),
             noise_seed=getattr(args, 'seed', 42),
         )
+    elif args.sched == 'cosine_iter':
+        lr_scheduler = CosineLRScheduler(
+            optimizer,
+            t_initial=num_epochs * iter_per_epoch,
+            t_mul=getattr(args, 'lr_cycle_mul', 1.),
+            lr_min=args.min_lr,
+            decay_rate=args.decay_rate,
+            warmup_lr_init=args.warmup_lr,
+            warmup_t=args.warmup_epochs * iter_per_epoch,
+            cycle_limit=getattr(args, 'lr_cycle_limit', 1),
+            t_in_epochs=False,
+            noise_range_t=noise_range,
+            noise_pct=getattr(args, 'lr_noise_pct', 0.67),
+            noise_std=getattr(args, 'lr_noise_std', 1.),
+            noise_seed=getattr(args, 'seed', 42),
+        )
+        num_epochs = lr_scheduler.get_cycle_length() + args.cooldown_epochs * iter_per_epoch
 
     return lr_scheduler, num_epochs

@@ -469,19 +469,19 @@ def main():
             model = NativeDDP(model, device_ids=[args.local_rank])  # can use device str in Torch >= 1.1
         # NOTE: EMA model does not need to be wrapped by DDP
 
-    # setup learning rate schedule and starting epoch
-    lr_scheduler, num_epochs = create_scheduler(args, optimizer)
-    start_epoch = 0
-    if args.start_epoch is not None:
-        # a specified start_epoch will always override the resume epoch
-        start_epoch = args.start_epoch
-    elif resume_epoch is not None:
-        start_epoch = resume_epoch
-    if lr_scheduler is not None and start_epoch > 0:
-        lr_scheduler.step(start_epoch)
-
-    if args.rank == 0:
-        _logger.info('Scheduled epochs: {}'.format(num_epochs))
+    # # setup learning rate schedule and starting epoch
+    # lr_scheduler, num_epochs = create_scheduler(args, optimizer)
+    # start_epoch = 0
+    # if args.start_epoch is not None:
+    #     # a specified start_epoch will always override the resume epoch
+    #     start_epoch = args.start_epoch
+    # elif resume_epoch is not None:
+    #     start_epoch = resume_epoch
+    # if lr_scheduler is not None and start_epoch > 0:
+    #     lr_scheduler.step(start_epoch)
+    #
+    # if args.rank == 0:
+    #     _logger.info('Scheduled epochs: {}'.format(num_epochs))
 
     # create the train and eval datasets
     dataset_train = create_dataset(
@@ -557,6 +557,25 @@ def main():
         crop_pct=data_config['crop_pct'],
         pin_memory=args.pin_mem,
     )
+
+    # setup learning rate schedule and starting epoch
+    lr_scheduler, num_iters = create_scheduler(args, optimizer, len(loader_train))
+    num_epochs = args.epochs + args.cooldown_epochs
+    start_epoch = 0
+    if args.start_epoch is not None:
+        # a specified start_epoch will always override the resume epoch
+        start_epoch = args.start_epoch
+    elif resume_epoch is not None:
+        start_epoch = resume_epoch
+    if lr_scheduler is not None and start_epoch > 0:
+        if args.sched == 'cosine_iter':
+            lr_scheduler.step_update(start_epoch * len(loader_train))
+        else:
+            lr_scheduler.step(start_epoch)
+
+    if args.rank == 0:
+        _logger.info('Scheduled iters: {}'.format(num_iters))
+        _logger.info('Scheduled epochs: {}'.format(num_epochs))
 
     # setup loss function
     if args.jsd:
@@ -726,6 +745,8 @@ def train_one_epoch(
                         rate_avg=input.size(0) * args.world_size / batch_time_m.avg,
                         lr=lr,
                         data_time=data_time_m))
+
+                wandb.log({'iter': num_updates, 'lr': lr})
 
                 if args.save_images and output_dir:
                     torchvision.utils.save_image(
