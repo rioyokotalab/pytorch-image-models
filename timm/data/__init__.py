@@ -5,6 +5,7 @@ from .constants import *
 from .dataset import ImageDataset, IterableImageDataset, AugMixDataset
 from .dataset_factory import create_dataset
 from .loader import create_loader
+from .loader_cpu import create_loader_cpu
 from .mixup import Mixup, FastCollateMixup
 from .parsers import create_parser
 from .real_labels import RealLabelsImagenet
