@@ -285,6 +285,9 @@ parser.add_argument('--project-name', default='pytorch-image-models', type=str,
 parser.add_argument('--pause', type=int, default=None,
                     help='pause training at the epoch')
 
+parser.add_argument('--pretrained-path', default='', type=str, metavar='PATH',
+                    help='Load from original checkpoint and pretrain (default: none) (with --pretrained)')
+
 # multinode running
 parser.add_argument('--dist-backend', default='nccl', type=str,
                     help='distributed backend')
@@ -374,7 +377,8 @@ def main():
         bn_momentum=args.bn_momentum,
         bn_eps=args.bn_eps,
         scriptable=args.torchscript,
-        checkpoint_path=args.initial_checkpoint)
+        checkpoint_path=args.initial_checkpoint,
+        pretrained_path=args.pretrained_path)
     if args.num_classes is None:
         assert hasattr(model, 'num_classes'), 'Model must have `num_classes` attr if not set on cmd line/config.'
         args.num_classes = model.num_classes  # FIXME handle model default vs config num_classes more elegantly
@@ -469,19 +473,9 @@ def main():
             model = NativeDDP(model, device_ids=[args.local_rank])  # can use device str in Torch >= 1.1
         # NOTE: EMA model does not need to be wrapped by DDP
 
-    # # setup learning rate schedule and starting epoch
-    # lr_scheduler, num_epochs = create_scheduler(args, optimizer)
-    # start_epoch = 0
-    # if args.start_epoch is not None:
-    #     # a specified start_epoch will always override the resume epoch
-    #     start_epoch = args.start_epoch
-    # elif resume_epoch is not None:
-    #     start_epoch = resume_epoch
-    # if lr_scheduler is not None and start_epoch > 0:
-    #     lr_scheduler.step(start_epoch)
-    #
-    # if args.rank == 0:
-    #     _logger.info('Scheduled epochs: {}'.format(num_epochs))
+    # if needed, load dataset from torch
+    if args.dataset == 'CIFAR10':
+        args.data_dir = f'{args.data_dir}/cifar10_data'
 
     # create the train and eval datasets
     dataset_train = create_dataset(
