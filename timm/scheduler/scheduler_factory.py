@@ -8,7 +8,7 @@ from .plateau_lr import PlateauLRScheduler
 from .multistep_lr import MultiStepLRScheduler
 
 
-def create_scheduler(args, optimizer, iter_per_epoch):
+def create_scheduler(args, optimizer, iter_per_epoch=1):
     num_epochs = args.epochs
 
     if getattr(args, 'lr_noise', None) is not None:

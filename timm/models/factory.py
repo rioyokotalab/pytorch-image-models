@@ -1,5 +1,5 @@
 from .registry import is_model, is_model_in_modules, model_entrypoint
-from .helpers import load_checkpoint
+from .helpers import load_checkpoint, load_original_pretrained_model
 from .layers import set_layer_config
 from .hub import load_model_config_from_hf
 
@@ -26,6 +26,7 @@ def create_model(
         model_name,
         pretrained=False,
         checkpoint_path='',
+        pretrained_path='',
         scriptable=None,
         exportable=None,
         no_jit=None,
@@ -79,6 +80,9 @@ def create_model(
 
     with set_layer_config(scriptable=scriptable, exportable=exportable, no_jit=no_jit):
         model = create_fn(pretrained=pretrained, **kwargs)
+
+    if pretrained_path:
+        load_original_pretrained_model(model, pretrained_path, kwargs['num_classes'])
 
     if checkpoint_path:
         load_checkpoint(model, checkpoint_path)

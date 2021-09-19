@@ -157,6 +157,37 @@ def adapt_input_conv(in_chans, conv_weight):
     return conv_weight
 
 
+def load_original_pretrained_model(model, pretrained_path, num_classes, use_ema=False, strict=True):
+    state_dict = load_state_dict(pretrained_path, use_ema)
+    load_original_pretrained(model, state_dict, num_classes=num_classes, strict=strict)
+
+
+def load_original_pretrained(model, state_dict, num_classes=1000, strict=True, default_cfg=None, in_chans=3, filter_fn=None, progress=False):
+    default_cfg = default_cfg or getattr(model, 'default_cfg', None) or {}
+
+    classifiers = default_cfg.get('classifier', None)
+    label_offset = default_cfg.get('label_offset', 0)
+    if classifiers is not None:
+        if isinstance(classifiers, str):
+            classifiers = (classifiers,)
+        # if num_classes != default_cfg['num_classes']:
+        if num_classes != 1:
+            for classifier_name in classifiers:
+                # completely discard fully connected if model num_classes doesn't match pretrained weights
+                del state_dict[classifier_name + '.weight']
+                del state_dict[classifier_name + '.bias']
+            strict = False
+        elif label_offset > 0:
+            for classifier_name in classifiers:
+                # special case for pretrained weights with an extra background class in pretrained weights
+                classifier_weight = state_dict[classifier_name + '.weight']
+                state_dict[classifier_name + '.weight'] = classifier_weight[label_offset:]
+                classifier_bias = state_dict[classifier_name + '.bias']
+                state_dict[classifier_name + '.bias'] = classifier_bias[label_offset:]
+
+    model.load_state_dict(state_dict, strict=strict)
+
+
 def load_pretrained(model, default_cfg=None, num_classes=1000, in_chans=3, filter_fn=None, strict=True, progress=False):
     """ Load pretrained checkpoint
 

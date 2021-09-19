@@ -553,7 +553,7 @@ def main():
         num_epochs = start_epoch + args.cooldown_epochs
         update_iter = (init_lr - args.min_lr) / num_iters
         if args.rank == 0:
-            print('lr scheduler steps: {}'.format(update_iter))
+            _logger.info('lr scheduler steps: {}'.format(update_iter))
 
     if args.rank == 0:
         _logger.info('Scheduled iters: {}'.format(num_iters))
@@ -627,9 +627,13 @@ def main():
                 # save proper checkpoint with eval metric
                 save_metric = train_metrics[eval_metric]
                 best_metric, best_epoch = saver.save_checkpoint(epoch, metric=save_metric)
-                if epoch in args.hold_epochs:
-                    checkpoint_file = f'output/train/{args.experiment}/checkpoint-{epoch}.pth.tar'
-                    target_file = f'output/train/{args.experiment}/held-checkpoint-{epoch}.pth.tar'
+                if args.hold_epochs is not None and epoch in args.hold_epochs:
+                    if args.output:
+                        checkpoint_file = f'{args.output}/{args.experiment}/checkpoint-{epoch}.pth.tar'
+                        target_file = f'{args.output}/{args.experiment}/held-checkpoint-{epoch}.pth.tar'
+                    else:
+                        checkpoint_file = f'output/train/{args.experiment}/checkpoint-{epoch}.pth.tar'
+                        target_file = f'output/train/{args.experiment}/held-checkpoint-{epoch}.pth.tar'
                     shutil.copyfile(checkpoint_file, target_file)
 
             if args.pause is not None:
