@@ -14,7 +14,6 @@ import torch
 
 from .model import unwrap_model, get_state_dict
 
-
 _logger = logging.getLogger(__name__)
 
 
@@ -148,3 +147,39 @@ class CheckpointSaver:
         files = glob.glob(recovery_path + '*' + self.extension)
         files = sorted(files)
         return files[0] if len(files) else ''
+
+
+class CheckpointSaverByIter(CheckpointSaver):
+    def _save(self, save_path, epoch, iter, metric=None):
+        save_state = {
+            'epoch': epoch,
+            'iter': iter,
+            'arch': type(self.model).__name__.lower(),
+            'state_dict': get_state_dict(self.model, self.unwrap_fn),
+            'optimizer': self.optimizer.state_dict(),
+            'version': 2,  # version < 2 increments epoch before save
+        }
+        if self.args is not None:
+            save_state['arch'] = self.args.model
+            save_state['args'] = self.args
+        if self.amp_scaler is not None:
+            save_state[self.amp_scaler.state_dict_key] = self.amp_scaler.state_dict()
+        if self.model_ema is not None:
+            save_state['state_dict_ema'] = get_state_dict(self.model_ema, self.unwrap_fn)
+        if metric is not None:
+            save_state['metric'] = metric
+        torch.save(save_state, save_path)
+
+    def save_recovery(self, epoch, batch_idx=0):
+        assert epoch >= 0
+        filename = '-'.join([self.recovery_prefix, str(epoch), str(batch_idx), 'iter']) + self.extension
+        save_path = os.path.join(self.recovery_dir, filename)
+        self._save(save_path, epoch, batch_idx)
+        if os.path.exists(self.last_recovery_file):
+            try:
+                _logger.debug("Cleaning recovery: {}".format(self.last_recovery_file))
+                os.remove(self.last_recovery_file)
+            except Exception as e:
+                _logger.error("Exception '{}' while removing {}".format(e, self.last_recovery_file))
+        self.last_recovery_file = self.curr_recovery_file
+        self.curr_recovery_file = save_path

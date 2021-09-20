@@ -1,5 +1,5 @@
 from .agc import adaptive_clip_grad
-from .checkpoint_saver import CheckpointSaver
+from .checkpoint_saver import CheckpointSaver, CheckpointSaverByIter
 from .clip_grad import dispatch_clip_grad
 from .cuda import ApexScaler, NativeScaler
 from .distributed import distribute_bn, reduce_tensor

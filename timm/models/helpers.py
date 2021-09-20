@@ -96,6 +96,47 @@ def resume_checkpoint(model, checkpoint_path, optimizer=None, loss_scaler=None, 
         raise FileNotFoundError()
 
 
+def resume_checkpoint_with_iter(model, checkpoint_path, optimizer=None, loss_scaler=None, log_info=True):
+    resume_epoch = None
+    resume_iter = None
+    if os.path.isfile(checkpoint_path):
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+            if log_info:
+                _logger.info('Restoring model state from checkpoint...')
+            new_state_dict = OrderedDict()
+            for k, v in checkpoint['state_dict'].items():
+                name = k[7:] if k.startswith('module') else k
+                new_state_dict[name] = v
+            model.load_state_dict(new_state_dict)
+
+            if optimizer is not None and 'optimizer' in checkpoint:
+                if log_info:
+                    _logger.info('Restoring optimizer state from checkpoint...')
+                optimizer.load_state_dict(checkpoint['optimizer'])
+
+            if loss_scaler is not None and loss_scaler.state_dict_key in checkpoint:
+                if log_info:
+                    _logger.info('Restoring AMP loss scaler state from checkpoint...')
+                loss_scaler.load_state_dict(checkpoint[loss_scaler.state_dict_key])
+
+            if 'epoch' in checkpoint:
+                resume_epoch = checkpoint['epoch']
+            if 'iter' in checkpoint:
+                resume_iter = checkpoint['iter']
+
+            if log_info:
+                _logger.info("Loaded checkpoint '{}' (epoch {})".format(checkpoint_path, checkpoint['epoch']))
+        else:
+            model.load_state_dict(checkpoint)
+            if log_info:
+                _logger.info("Loaded checkpoint '{}'".format(checkpoint_path))
+        return resume_epoch, resume_iter
+    else:
+        _logger.error("No checkpoint found at '{}'".format(checkpoint_path))
+        raise FileNotFoundError()
+
+
 def load_custom_pretrained(model, default_cfg=None, load_fn=None, progress=False, check_hash=False):
     r"""Loads a custom (read non .pth) weight file
 
