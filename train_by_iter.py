@@ -294,9 +294,12 @@ parser.add_argument('--cooldown', action='store_true',
 parser.add_argument('--dist-backend', default='nccl', type=str,
                     help='distributed backend')
 
-# checkpoint for iter
-parser.add_argument('--load-iter', action='store_true',
-                    help='load checkpoint to resume from specific iteration')
+# training by iter
+parser.add_argument('--warmup-iter', type=int, default=None,
+                    help='iterations to warmup LR')
+# parser.add_argument('--iterations', type=int, default=None,
+#                     help='number of iterations to train')
+
 
 def _parse_args():
     # Do we have a config file to parse?

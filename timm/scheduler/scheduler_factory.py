@@ -97,6 +97,10 @@ def create_scheduler(args, optimizer, iter_per_epoch=1):
             noise_seed=getattr(args, 'seed', 42),
         )
     elif args.sched == 'cosine_iter':
+        if args.warmup_iter:
+            warmup_t = args.warmup_iter
+        else:
+            warmup_t = args.warmup_epochs * iter_per_epoch
         lr_scheduler = CosineLRScheduler(
             optimizer,
             t_initial=num_epochs * iter_per_epoch,
@@ -104,7 +108,7 @@ def create_scheduler(args, optimizer, iter_per_epoch=1):
             lr_min=args.min_lr,
             decay_rate=args.decay_rate,
             warmup_lr_init=args.warmup_lr,
-            warmup_t=args.warmup_epochs * iter_per_epoch,
+            warmup_t=warmup_t,
             cycle_limit=getattr(args, 'lr_cycle_limit', 1),
             t_in_epochs=False,
             noise_range_t=noise_range,
