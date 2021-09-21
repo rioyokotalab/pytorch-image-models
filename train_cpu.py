@@ -287,7 +287,7 @@ parser.add_argument('--pause', type=int, default=None,
                     help='pause training at the epoch')
 
 # distributed training
-parser.add_argument('--world-size', default=-1, type=int,
+parser.add_argument('--world-size', default=1, type=int,
                     help='number of nodes for distributed training')
 parser.add_argument("--local_rank", default=0, type=int)
 parser.add_argument("--global_rank", default=0, type=int)
@@ -318,24 +318,24 @@ def main():
     args, args_text = _parse_args()
 
     args.prefetcher = not args.no_prefetcher
-    args.distributed = False
+    args.distributed = True
     if args.device is not None:
         print("Use GPU: {} for training".format(args.device))
     if args.distributed:
         # initialize torch.distributed using MPI
-        # from mpi4py import MPI
-        # comm = MPI.COMM_WORLD
-        # world_size = comm.Get_size()
-        # rank = comm.Get_rank()
-        # init_method = 'tcp://{}:23456'.format(args.dist_url)
+        from mpi4py import MPI
+        comm = MPI.COMM_WORLD
+        world_size = comm.Get_size()
+        rank = comm.Get_rank()
+        #init_method = 'tcp://{}:23456'.format(args.dist_url)
         master_addr = os.getenv("MASTER_ADDR", default="localhost")
         master_port = os.getenv('MASTER_PORT', default='8888')
         method = "tcp://{}:{}".format(master_addr, master_port)
-        rank = int(os.getenv('OMPI_COMM_WORLD_RANK', '0'))
-        world_size = int(os.getenv('OMPI_COMM_WORLD_SIZE', '1'))
+        #rank = int(os.getenv('OMPI_COMM_WORLD_RANK', '0'))
+        #world_size = int(os.getenv('OMPI_COMM_WORLD_SIZE', '1'))
         ngpus_per_node = 1
         device = rank % ngpus_per_node
-        torch.distributed.init_process_group('mpi', init_method=method, world_size=world_size, rank=rank)
+        torch.distributed.init_process_group(args.dist_backend, init_method=method, world_size=world_size, rank=rank)
         args.local_rank = device
         args.global_rank = rank
         args.device = device
@@ -473,7 +473,7 @@ def main():
         else:
             if args.global_rank == 0:
                 _logger.info("Using native Torch DistributedDataParallel.")
-            model = NativeDDP(model, device_ids=[args.local_rank])  # can use device str in Torch >= 1.1
+            model = NativeDDP(model, device_ids=None)  # can use device str in Torch >= 1.1
         # NOTE: EMA model does not need to be wrapped by DDP
 
     # setup learning rate schedule and starting epoch
