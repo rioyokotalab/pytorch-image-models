@@ -1,7 +1,7 @@
 #!/bin/bash
 #$ -cwd
 #$ -l rt_F=2
-#$ -l h_rt=01:00:00
+#$ -l h_rt=30:00:00
 #$ -j y
 #$ -o output/o.$JOB_ID
 
@@ -17,14 +17,20 @@ module load cuda/10.2/10.2.89 cudnn openmpi nccl/2.7/2.7.8-1
 export MASTER_ADDR=$(/usr/sbin/ip a show dev bond0 | grep inet | cut -d " " -f 6 | cut -d "/" -f 1)
 
 export NGPUS=8
-export NPERNODE=4
-mpirun -npernode $NPERNODE -np $NGPUS \
-python train.py /groups/gca50014/imnet/ILSVRC2012 \
-    --model vit_deit_tiny_patch16_224 --experiment pretrain_deit_tiny \
-    --sched cosine --epochs 300 --lr 0.001 --weight-decay 0.05 \
-    --batch-size 64 --opt adamw \
+export NUM_PROC=4
+mpirun -npernode $NUM_PROC -np $NGPUS \
+python train_without_eval.py /groups/gcc50533/imnet/ILSVRC2012 \
+    --model deit_tiny_patch16_224 --experiment pretrain_deit_tiny_imnet_test \
+    --input-size 3 224 224 --num-classes 1000 \
+    --sched cosine_iter --epochs 300 --lr 0.001 --weight-decay 0.05 \
+    --batch-size 32 --opt adamw \
     --warmup-epochs 5 --cooldown-epochs 0 \
-    --smoothing 0.1 --drop-path 0.1 --aa rand-m9-mstd0.5-inc1 \
-    --repeated-aug --mixup 0.8 --cutmix 1.0 --reprob 0.25 \
-    -j 8 --amp
+    --smoothing 0.1 --aa rand-m9-mstd0.5-inc1 \
+    --repeated-aug --mixup 0.8 --cutmix 1.0 \
+    --drop-path 0.1 --reprob 0.25 \
+    -j 8 --eval-metric loss \
+    --recovery-interval 50 \
+    --output /groups/gcc50533/acc12016yi/pytorch-image-models/output/train \
+    --log-wandb \
+    --resume /groups/gcc50533/acc12016yi/pytorch-image-models/output/train/pretrain_deit_tiny_imnet_test/recovery-0-849.pth.tar \
 #    --log-wandb

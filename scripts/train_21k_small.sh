@@ -1,7 +1,7 @@
 #!/bin/bash
 #$ -cwd
 #$ -l rt_F=32
-#$ -l h_rt=23:30:00
+#$ -l h_rt=72:00:00
 #$ -j y
 #$ -o output/o.$JOB_ID
 
@@ -19,9 +19,9 @@ export MASTER_ADDR=$(/usr/sbin/ip a show dev bond0 | grep inet | cut -d " " -f 6
 export NGPUS=128
 export NUM_PROC=4
 mpirun -npernode $NUM_PROC -np $NGPUS \
-python train_without_eval.py /groups/gcc50533/imnet/ImageNet21k \
-    --model deit_base_patch16_224 --experiment pretrain_deit_base_imagenet21k_128gpus_300epochs \
-    --sched cosine_iter --epochs 300 --lr 1.0e-3 --weight-decay 0.05 \
+python train_without_eval.py /groups/gca50014/imnet/ImageNet21k \
+    --model deit_small_patch16_224 --experiment pretrain_deit_small_imagenet21k_128gpus_300epochs \
+    --sched cosine_iter --epochs 300 --lr 4.0e-3 --weight-decay 0.05 \
     --batch-size 64 --opt adamw --num-classes 21841 \
     --warmup-epochs 5 --cooldown-epochs 0 \
     --smoothing 0.1 --drop-path 0.1 --aa rand-m9-mstd0.5-inc1 \
@@ -29,5 +29,5 @@ python train_without_eval.py /groups/gcc50533/imnet/ImageNet21k \
     -j 64 --eval-metric loss \
     --hold-epochs 50 100 150 200 250 \
     --output /groups/gcc50533/acc12016yi/pytorch-image-models/output/train \
-    --resume /groups/gcc50533/acc12016yi/pytorch-image-models/output/train/pretrain_deit_base_imagenet21k_128gpus_300epochs/last.pth.tar \
+    --resume /groups/gcc50533/acc12016yi/pytorch-image-models/output/train/pretrain_deit_small_imagenet21k_128gpus_300epochs/last.pth.tar \
     --log-wandb
