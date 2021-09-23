@@ -1,8 +1,8 @@
 #export MASTER_ADDR=$(/usr/sbin/ip a show dev bond0 | grep 'inet ' | cut -d " " -f 6 | cut -d "/" -f 1)
-#export NGPUS=1
-#export NUM_PROC=1
-#mpirun -npernode $NUM_PROC -np $NGPUS \
-python train_cpu.py ./ \
+export NGPUS=1
+export NUM_PROC=1
+mpirun -npernode $NUM_PROC -np $NGPUS \
+python train_mpi.py ./ \
     --dataset CIFAR10 \
     --num-classes 10 \
     --model vit_deit_tiny_patch16_224 \
