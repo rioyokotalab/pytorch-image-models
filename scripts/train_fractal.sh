@@ -27,7 +27,7 @@ export NGPUS=128
 export NUM_PROC=4
 mpirun -npernode $NUM_PROC -np $NGPUS \
 python train_without_eval.py $DATA_DIR \
-    --model deit_$MODEL_patch16_224 --experiment pretrain_deit_$MODEL_fractal$CLASSES \
+    --model deit_${MODEL}_patch16_224 --experiment pretrain_deit_${MODEL}_fractal${CLASSES} \
     --sched cosine_iter --epochs $EPOCHS --lr $LR --weight-decay 0.05 \
     --batch-size 64 --opt adamw --num-classes $CLASSES \
     --warmup-epochs 5 --cooldown-epochs 0 \
@@ -37,6 +37,6 @@ python train_without_eval.py $DATA_DIR \
     -j 64 --eval-metric loss \
     --hold-epochs 10 \
     --log-wandb \
-    --output $OUT_DIR 
+    --output $OUT_DIR
 #    --seed 30
 #    --resume /groups/gcc50533/

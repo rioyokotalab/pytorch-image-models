@@ -25,7 +25,7 @@ export NGPUS=128
 export NUM_PROC=4
 mpirun -npernode $NUM_PROC -np $NGPUS \
 python train_without_eval.py $DATA_DIR \
-    --model deit_$MODEL_patch16_224 --experiment pretrain_deit_$MODEL_imagenet21k \
+    --model deit_${MODEL}_patch16_224 --experiment pretrain_deit_${MODEL}_imagenet21k \
     --sched cosine_iter --epochs 90 --lr $LR --weight-decay 0.05 \
     --batch-size 64 --opt adamw --num-classes 21841 \
     --warmup-epochs 5 --cooldown-epochs 0 \
