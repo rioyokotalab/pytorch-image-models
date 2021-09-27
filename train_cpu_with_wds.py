@@ -25,7 +25,7 @@ import torch.nn as nn
 import torchvision.utils
 from torch.nn.parallel import DistributedDataParallel as NativeDDP
 
-from timm.data import create_dataset, create_loader, resolve_data_config, Mixup, FastCollateMixup, AugMixDataset
+from timm.data import create_dataset, create_loader_cpu, resolve_data_config, Mixup, FastCollateMixup, AugMixDataset
 from timm.models import create_model, safe_model_name, resume_checkpoint, load_checkpoint, \
     convert_splitbn_model, model_parameters
 from timm.utils import *
@@ -127,6 +127,8 @@ parser.add_argument('-vb', '--validation-batch-size-multiplier', type=int, defau
 
 # Web Datasets
 parser.add_argument('--trainshards', default=None,
+                    help='path/URL for ImageNet shards')
+parser.add_argument('--evalshards', default=None,
                     help='path/URL for ImageNet shards')
 # parser.add_argument('--trainsize', type=int, default=1000, help='ImageNet training set size')
 parser.add_argument('-w', '--webdataset', action='store_true', default=False,
@@ -426,7 +428,7 @@ def main():
         model = convert_splitbn_model(model, max(num_aug_splits, 2))
 
     # move model to GPU, enable channels last layout if set
-    model.cuda()
+    # model.cuda()
     if args.channels_last:
         model = model.to(memory_format=torch.channels_last)
 
@@ -471,7 +473,7 @@ def main():
     resume_epoch = None
     resume_iter = None
     if args.resume:
-        resume_epoch, resume_iter = resume_checkpoint_with_iter(
+        resume_epoch, resume_iter = resume_checkpoint(
             model, args.resume,
             optimizer=None if args.no_resume_opt else optimizer,
             loss_scaler=None if args.no_resume_opt else loss_scaler,
@@ -574,28 +576,82 @@ def main():
         if args.trainshards is not None:
             train_dataset = (
                 # wds.Dataset(args.trainshards, length=num_batches)
-                wds.Dataset(args.trainshards)
+                wds.WebDataset(args.trainshards)
                 # wds.WebDataset(args.trainshards)
                     .shuffle(200000)
                     .decode("pil")
-                    .rename(image="png", target="cls")
+                    .rename(image="input.pyd", target="output.pyd")
+                    .map_dict(image=transform_train)
+                    .to_tuple("image", "target")
+            )
+            eval_dataset = (
+                # wds.Dataset(args.trainshards, length=num_batches)
+                wds.WebDataset(args.evalshards)
+                # wds.WebDataset(args.trainshards)
+                    .shuffle(200000)
+                    .decode("pil")
+                    .rename(image="input.pyd", target="output.pyd")
                     .map_dict(image=transform_train)
                     .to_tuple("image", "target")
             )
             # train_dataset = train_dataset.batched(args.bs)
-            loader_train = wds.WebLoader(train_dataset, batch_size=None, shuffle=False, num_workers=args.workers)
-            train_dataset = train_dataset.batched(args.batch_size, partial=False)
-
-            dataset_size = 300000000
-            number_of_batches = dataset_size // (args.batch_size * args.world_size)
-            print0("dataset_size:{}, batch_size:{}, world_size(Total Devices):{}".format(dataset_size, args.batch_size,
+            loader_train = create_loader_cpu(
+                train_dataset,
+                input_size=data_config['input_size'],
+                batch_size=args.batch_size,
+                is_training=True,
+                use_prefetcher=args.prefetcher,
+                no_aug=args.no_aug,
+                re_prob=args.reprob,
+                re_mode=args.remode,
+                re_count=args.recount,
+                re_split=args.resplit,
+                scale=args.scale,
+                ratio=args.ratio,
+                hflip=args.hflip,
+                vflip=args.vflip,
+                color_jitter=args.color_jitter,
+                auto_augment=args.aa,
+                num_aug_splits=num_aug_splits,
+                interpolation=train_interpolation,
+                mean=data_config['mean'],
+                std=data_config['std'],
+                num_workers=args.workers,
+                distributed=args.distributed,
+                collate_fn=collate_fn,
+                pin_memory=args.pin_mem,
+                use_multi_epochs_loader=args.use_multi_epochs_loader,
+                repeated_aug=args.repeated_aug
+            )
+            loader_eval = create_loader_cpu(
+                eval_dataset,
+                input_size=data_config['input_size'],
+                batch_size=args.validation_batch_size_multiplier * args.batch_size,
+                is_training=False,
+                use_prefetcher=args.prefetcher,
+                interpolation=data_config['interpolation'],
+                mean=data_config['mean'],
+                std=data_config['std'],
+                num_workers=args.workers,
+                distributed=args.distributed,
+                crop_pct=data_config['crop_pct'],
+                pin_memory=args.pin_mem,
+            )
+            ###loader_train = wds.WebLoader(train_dataset, batch_size=None, shuffle=False, num_workers=args.workers)
+            ###train_dataset = train_dataset.batched(args.batch_size, partial=False)
+            train_dataset_size = 50000
+            eval_dataset_size = 10000
+            number_of_train_batches = train_dataset_size // (args.batch_size * args.world_size)
+            number_of_eval_batches = eval_dataset_size // (args.batch_size * args.world_size)
+            print0("dataset_size:{}, batch_size:{}, world_size(Total Devices):{}".format(train_dataset_size, args.batch_size,
                                                                                          args.world_size))
-            print0("-- --> Number of batches to be processed per GPU = {}".format(number_of_batches))
-            loader_train = loader_train.repeat(2).slice(number_of_batches)
+            print0("-- --> Number of batches to be processed per GPU = {}".format(number_of_train_batches))
+            ###loader_train = loader_train.repeat(2).slice(number_of_batches)
             # This only sets the value returned by the len() function; nothing else uses it,
             # but some frameworks care about it.
-            loader_train.length = number_of_batches
-            args.nb_classes = 300000
+            loader_train.length = number_of_train_batches
+            loader_eval.length = number_of_eval_batches
+            args.nb_classes = 10
 
         else:
             print0("\n\n=> Loading DataSet wiht WebDataset using .tars and ========>>>>>>> JSON")
@@ -611,13 +667,13 @@ def main():
             # transform_train = build_transform(True,args)
             train_dataset = (
                 # wds.Dataset(args.trainshards,length=num_batches)
-                wds.Dataset(shard_fns)
+                wds.WebDataset(shard_fns)
                 # wds.Dataset(args.trainshards)
                 # wds.WebDataset(args.trainshards)ls
                     .shuffle(1000)
                     .decode("pil")
                     # .rename(image="jpg;jpeg", target="cls")
-                    .rename(image="png", target="json")
+                    .rename(image="input.pyd", target="output.pyd")
                     .map_dict(image=transform_train)
                     .to_tuple("image", "target")
                     .batched(args.batch_size, partial=False)
@@ -628,7 +684,7 @@ def main():
             loader_train = wds.WebLoader(train_dataset, batch_size=None, shuffle=False, num_workers=args.workers)
 
             # dataset_size = 1281167
-            dataset_size = 300000000
+            dataset_size = 50000
             number_of_batches = dataset_size // (args.batch_size * args.world_size)
             print0("dataset_size:{}, batch_size:{}, world_size(Total Devices):{}".format(dataset_size, args.batch_size,
                                                                                          args.world_size))
@@ -637,7 +693,7 @@ def main():
             # This only sets the value returned by the len() function; nothing else uses it,
             # but some frameworks care about it.
             loader_train.length = number_of_batches
-            args.nb_classes = 3000000
+            args.nb_classes = 10
 
         ## MIXUPPPPPPP
         # setup mixup / cutmix
@@ -672,7 +728,7 @@ def main():
         train_interpolation = args.train_interpolation
         if args.no_aug or not train_interpolation:
             train_interpolation = data_config['interpolation']
-        loader_train = create_loader(
+        loader_train = create_loader_cpu(
             dataset_train,
             input_size=data_config['input_size'],
             batch_size=args.batch_size,
@@ -700,10 +756,29 @@ def main():
             use_multi_epochs_loader=args.use_multi_epochs_loader,
             repeated_aug=args.repeated_aug
         )
+    #dataset_eval = create_dataset(
+    #    args.dataset, root=args.data_dir, split=args.val_split, is_training=False, batch_size=args.batch_size)
+    #loader_eval = create_loader_cpu(
+    #    dataset_eval,
+    #    input_size=data_config['input_size'],
+    #    batch_size=args.validation_batch_size_multiplier * args.batch_size,
+    #    is_training=False,
+    #    use_prefetcher=args.prefetcher,
+    #    interpolation=data_config['interpolation'],
+    #    mean=data_config['mean'],
+    #    std=data_config['std'],
+    #    num_workers=args.workers,
+    #    distributed=args.distributed,
+    #    crop_pct=data_config['crop_pct'],
+    #    pin_memory=args.pin_mem,
+    #)
+
 
     # setup learning rate schedule and starting epoch
-    iter_per_epoch = len(loader_train)
-    lr_scheduler, num_iters = create_scheduler(args, optimizer, len(loader_train))
+    #iter_per_epoch = len(loader_train)
+    iter_per_epoch = loader_train.length
+    #lr_scheduler, num_iters = create_scheduler(args, optimizer, len(loader_train))
+    lr_scheduler, num_iters = create_scheduler(args, optimizer)
     num_epochs = args.epochs + args.cooldown_epochs
     start_epoch = 0
     start_iter = -1
@@ -716,13 +791,15 @@ def main():
             start_iter = resume_iter
     if lr_scheduler is not None and (start_epoch > 0 or start_iter > 0):
         if args.sched == 'cosine_iter':
-            lr_scheduler.step_update(start_epoch * len(loader_train) + start_iter)
+            #lr_scheduler.step_update(start_epoch * len(loader_train) + start_iter)
+            lr_scheduler.step_update(start_epoch * loader_train.length + start_iter)
         else:
             lr_scheduler.step(start_epoch)
     update_iter = None
     if args.cooldown:
         init_lr = optimizer.param_groups[0]['lr']
-        num_iters = args.cooldown_epochs * len(loader_train)
+        #num_iters = args.cooldown_epochs * len(loader_train)
+        num_iters = args.cooldown_epochs * loader_train.length
         num_epochs = start_epoch + args.cooldown_epochs
         update_iter = (init_lr - args.min_lr) / num_iters
         if args.rank == 0:
@@ -736,16 +813,17 @@ def main():
     # setup loss function
     if args.jsd:
         assert num_aug_splits > 1  # JSD only valid with aug splits set
-        train_loss_fn = JsdCrossEntropy(num_splits=num_aug_splits, smoothing=args.smoothing).cuda()
+        train_loss_fn = JsdCrossEntropy(num_splits=num_aug_splits, smoothing=args.smoothing)
     elif mixup_active:
         # smoothing is handled with mixup target transform
         print0("Criterion is SoftTargetCrossEntropy")
         # train_loss_fn = SoftTargetCrossEntropy().cuda()
         train_loss_fn = SoftTargetCrossEntropy()
     elif args.smoothing:
-        train_loss_fn = LabelSmoothingCrossEntropy(smoothing=args.smoothing).cuda()
+        train_loss_fn = LabelSmoothingCrossEntropy(smoothing=args.smoothing)
     else:
-        train_loss_fn = nn.CrossEntropyLoss().cuda()
+        train_loss_fn = nn.CrossEntropyLoss()
+    validate_loss_fn = nn.CrossEntropyLoss()
 
     # setup checkpoint saver and eval metric tracking
     eval_metric = args.eval_metric
@@ -764,7 +842,7 @@ def main():
             ])
         output_dir = get_outdir(args.output if args.output else './output/train', exp_name)
         decreasing = True if eval_metric == 'loss' else False
-        saver = CheckpointSaverByIter(
+        saver = CheckpointSaver(
             model=model, optimizer=optimizer, args=args, model_ema=model_ema, amp_scaler=loss_scaler,
             checkpoint_dir=output_dir, recovery_dir=output_dir, decreasing=decreasing, max_history=args.checkpoint_hist)
         with open(os.path.join(output_dir, 'args.yaml'), 'w') as f:
@@ -794,14 +872,19 @@ def main():
                 if args.rank == 0:
                     _logger.info("Distributing BatchNorm running means and vars")
                 distribute_bn(model, args.world_size, args.dist_bn == 'reduce')
+            
+            eval_metrics = validate(model, loader_eval, validate_loss_fn, args, amp_autocast=amp_autocast)
 
             if model_ema is not None and not args.model_ema_force_cpu:
                 if args.distributed and args.dist_bn in ('broadcast', 'reduce'):
                     distribute_bn(model_ema, args.world_size, args.dist_bn == 'reduce')
+                ema_eval_metrics = validate(
+                    model_ema.module, loader_eval, validate_loss_fn, args, amp_autocast=amp_autocast, log_suffix=' (EMA)')
+                eval_metrics = ema_eval_metrics
 
             if lr_scheduler is not None:
                 # step LR for next epoch
-                lr_scheduler.step(epoch + 1, train_metrics[eval_metric])
+                lr_scheduler.step(epoch + 1, eval_metrics[eval_metric])
 
             if output_dir is not None and args.rank == 0:
                 update_summary(
@@ -810,7 +893,7 @@ def main():
 
             if saver is not None:
                 # save proper checkpoint with eval metric
-                save_metric = train_metrics[eval_metric]
+                save_metric = eval_metrics[eval_metric]
                 best_metric, best_epoch = saver.save_checkpoint(epoch, metric=save_metric)
                 if args.hold_epochs is not None and epoch in args.hold_epochs:
                     if args.output:
@@ -851,8 +934,10 @@ def train_one_epoch(
     model.train()
 
     end = time.time()
-    last_idx = len(loader) - 1
-    num_updates = epoch * len(loader)
+    #last_idx = len(loader) - 1
+    last_idx = loader.length - 1
+    #num_updates = epoch * len(loader)
+    num_updates = epoch * loader.length
     for batch_idx, (input, target) in enumerate(loader):
         if epoch == start_epoch and batch_idx <= start_iter:
             num_updates += 1
@@ -870,7 +955,7 @@ def train_one_epoch(
             target = b
 
         if not args.prefetcher:
-            input, target = input.cuda(), target.cuda()
+            #input, target = input.cuda(), target.cuda()
             if mixup_fn is not None:
                 input, target = mixup_fn(input, target)
         if args.channels_last:
@@ -901,7 +986,7 @@ def train_one_epoch(
         if model_ema is not None:
             model_ema.update(model)
 
-        torch.cuda.synchronize()
+        #torch.cuda.synchronize()
         num_updates += 1
         batch_time_m.update(time.time() - end)
         if last_batch or batch_idx % args.log_interval == 0:
@@ -921,7 +1006,7 @@ def train_one_epoch(
                     'LR: {lr:.3e}  '
                     'Data: {data_time.val:.3f} ({data_time.avg:.3f})'.format(
                         epoch,
-                        batch_idx, len(loader),
+                        batch_idx, loader.length,
                         100. * batch_idx / last_idx,
                         loss=losses_m,
                         batch_time=batch_time_m,
@@ -951,6 +1036,8 @@ def train_one_epoch(
             lr_scheduler.step_update(num_updates=num_updates, metric=losses_m.avg)
 
         end = time.time()
+        if batch_idx==-1:
+            break
         # end for
 
     if hasattr(optimizer, 'sync_lookahead'):
@@ -988,8 +1075,8 @@ def train_one_epoch_web(
         input = input.float()
         target = target.float()
 
-        input = input.cuda()
-        target = target.cuda()
+        #input = input.cuda()
+        #target = target.cuda()
 
         # if mixup_fn is not None:
         input, target = mixup_fn(input, target)
@@ -1022,7 +1109,7 @@ def train_one_epoch_web(
         if model_ema is not None:
             model_ema.update(model)
 
-        torch.cuda.synchronize()
+        #torch.cuda.synchronize()
         num_updates += 1
         batch_time_m.update(time.time() - end)
         if last_batch or batch_idx % args.log_interval == 0:
@@ -1079,6 +1166,67 @@ def train_one_epoch_web(
 
     return OrderedDict([('loss', losses_m.avg)])
 
+
+def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix=''):
+    batch_time_m = AverageMeter()
+    losses_m = AverageMeter()
+    top1_m = AverageMeter()
+    top5_m = AverageMeter()
+
+    model.eval()
+
+    end = time.time()
+    last_idx = loader.length - 1
+    with torch.no_grad():
+        for batch_idx, (input, target) in enumerate(loader):
+            last_batch = batch_idx == last_idx
+            if args.channels_last:
+                input = input.contiguous(memory_format=torch.channels_last)
+
+            with amp_autocast():
+                output = model(input)
+            if isinstance(output, (tuple, list)):
+                output = output[0]
+
+            # augmentation reduction
+            reduce_factor = args.tta
+            if reduce_factor > 1:
+                output = output.unfold(0, reduce_factor, reduce_factor).mean(dim=2)
+                target = target[0:target.size(0):reduce_factor]
+
+            loss = loss_fn(output, target)
+            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+
+            if args.distributed:
+                reduced_loss = reduce_tensor(loss.data, args.world_size)
+                acc1 = reduce_tensor(acc1, args.world_size)
+                acc5 = reduce_tensor(acc5, args.world_size)
+            else:
+                reduced_loss = loss.data
+
+            losses_m.update(reduced_loss.item(), input.size(0))
+            top1_m.update(acc1.item(), output.size(0))
+            top5_m.update(acc5.item(), output.size(0))
+
+            batch_time_m.update(time.time() - end)
+            end = time.time()
+            if args.rank == 0 and (last_batch or batch_idx % args.log_interval == 0):
+                log_name = 'Test' + log_suffix
+                _logger.info(
+                    '{0}: [{1:>4d}/{2}]  '
+                    'Time: {batch_time.val:.3f} ({batch_time.avg:.3f})  '
+                    'Loss: {loss.val:>7.4f} ({loss.avg:>6.4f})  '
+                    'Acc@1: {top1.val:>7.4f} ({top1.avg:>7.4f})  '
+                    'Acc@5: {top5.val:>7.4f} ({top5.avg:>7.4f})'.format(
+                        log_name, batch_idx, last_idx, batch_time=batch_time_m,
+                        loss=losses_m, top1=top1_m, top5=top5_m))
+            if batch_idx==-1:
+                break
+        
+
+    metrics = OrderedDict([('loss', losses_m.avg), ('top1', top1_m.avg), ('top5', top5_m.avg)])
+
+    return metrics
 
 if __name__ == '__main__':
     main()
