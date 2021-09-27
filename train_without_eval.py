@@ -281,11 +281,11 @@ parser.add_argument('--torchscript', dest='torchscript', action='store_true',
                     help='convert model torchscript for inference')
 parser.add_argument('--log-wandb', action='store_true', default=False,
                     help='log training and validation metrics to wandb')
-parser.add_argument('--project-name', default='pytorch-image-models', type=str,
+parser.add_argument('--project-name', default='Fractal', type=str,
                     help='set wandb project name')
 parser.add_argument('--pause', type=int, default=None,
                     help='pause training at the epoch')
-parser.add_argument('--hold-epochs', nargs='+', type=int,
+parser.add_argument('--hold-epochs', type=int, default=None,
                     help='epochs of which checkpoint will never be deleted')
 parser.add_argument('--cooldown', action='store_true',
                     help='doing cooldown epochs')
@@ -364,7 +364,7 @@ def main():
 
     if args.log_wandb and args.rank == 0:
         if has_wandb:
-            wandb.init(project=args.project_name, name=args.experiment, config=args)
+            wandb.init(project=args.project_name, entity='yokota-vit', name=args.experiment, config=args)
         else:
             _logger.warning("You've requested to log metrics to wandb but package not found. "
                             "Metrics not being logged to wandb, try `pip install wandb`")
@@ -630,7 +630,7 @@ def main():
                 # save proper checkpoint with eval metric
                 save_metric = train_metrics[eval_metric]
                 best_metric, best_epoch = saver.save_checkpoint(epoch, metric=save_metric)
-                if args.hold_epochs is not None and epoch in args.hold_epochs:
+                if args.hold_epochs is not None and epoch % args.hold_epochs == 0:
                     if args.output:
                         checkpoint_file = f'{args.output}/{args.experiment}/checkpoint-{epoch}.pth.tar'
                         target_file = f'{args.output}/{args.experiment}/held-checkpoint-{epoch}.pth.tar'
