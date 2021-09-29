@@ -633,9 +633,13 @@ def main():
                 if args.hold_epochs is not None and epoch % args.hold_epochs == 0:
                     if args.output:
                         checkpoint_file = f'{args.output}/{args.experiment}/checkpoint-{epoch}.pth.tar'
+                        if not os.path.exists(checkpoint_file):
+                            checkpoint_file = f'{args.output}/{args.experiment}/last.pth.tar'
                         target_file = f'{args.output}/{args.experiment}/held-checkpoint-{epoch}.pth.tar'
                     else:
                         checkpoint_file = f'output/train/{args.experiment}/checkpoint-{epoch}.pth.tar'
+                        if not os.path.exists(checkpoint_file):
+                            checkpoint_file = f'output/train/{args.experiment}/last.pth.tar'
                         target_file = f'output/train/{args.experiment}/held-checkpoint-{epoch}.pth.tar'
                     shutil.copyfile(checkpoint_file, target_file)
 
