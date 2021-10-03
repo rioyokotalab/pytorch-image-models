@@ -280,7 +280,7 @@ parser.add_argument('--torchscript', dest='torchscript', action='store_true',
                     help='convert model torchscript for inference')
 parser.add_argument('--log-wandb', action='store_true', default=False,
                     help='log training and validation metrics to wandb')
-parser.add_argument('--project-name', default='pytorch-image-models', type=str,
+parser.add_argument('--project-name', default='Fractal', type=str,
                     help='set wandb project name')
 parser.add_argument('--pause', type=int, default=None,
                     help='pause training at the epoch')
@@ -291,6 +291,8 @@ parser.add_argument('--pretrained-path', default='', type=str, metavar='PATH',
 # multinode running
 parser.add_argument('--dist-backend', default='nccl', type=str,
                     help='distributed backend')
+
+parser.add_argument('--warmup-iter', default=None, type=int)
 
 def _parse_args():
     # Do we have a config file to parse?
@@ -359,7 +361,7 @@ def main():
 
     if args.log_wandb and args.rank == 0:
         if has_wandb:
-            wandb.init(project=args.project_name, name=args.experiment, config=args)
+            wandb.init(project=args.project_name, entity='yokota-vit', name=args.experiment, config=args)
         else:
             _logger.warning("You've requested to log metrics to wandb but package not found. "
                             "Metrics not being logged to wandb, try `pip install wandb`")
