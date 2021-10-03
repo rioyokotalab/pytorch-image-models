@@ -1,7 +1,7 @@
 #!/bin/bash
 #$ -cwd
-#$ -l rt_F=8
-#$ -l h_rt=60:00:00
+#$ -l rt_F=4
+#$ -l h_rt=04:00:00
 #$ -j y
 #$ -o output/o.$JOB_ID
 
@@ -18,8 +18,8 @@ export MASTER_ADDR=$(/usr/sbin/ip a show dev bond0 | grep inet | cut -d " " -f 6
 
 export MODEL=base
 # choose from {fractal, imagenet}
-export DATA=imagenet
-export CLASSES=21
+export DATA=fractal
+export CLASSES=50
 
 if [ ${DATA} = "fractal" ]; then
   export CP_DIR=/groups/gcc50533/check_points/${MODEL}/${CLASSES}k/pre_training/pretrain_deit_${MODEL}_${DATA}${CLASSES}000/last.pth.tar
@@ -29,19 +29,17 @@ else
   export OUT_DIR=/groups/gcc50533/check_points/${MODEL}/i${CLASSES}k/fine_tuning
 fi
 
-export NGPUS=32
+export NGPUS=16
 export NPERNODE=4
 mpirun -npernode $NPERNODE -np $NGPUS \
-python train.py /groups/gca50014/migrated_from_SFA_GPFS/data/ILSVRC2012 \
-    --model deit_${MODEL}_patch16_224 --experiment finetune_deit_${MODEL}_imnet1k_${DATA}${CLASSES}k \
-    --input-size 3 224 224 --num-classes 1000 \
-    --sched cosine_iter --epochs 300 --lr 0.001 --weight-decay 0.05 \
-    --batch-size 32 --opt adamw \
+python train.py ./ --dataset CIFAR10 \
+    --model deit_${MODEL}_patch16_224 --experiment finetune_deit_${MODEL}_cifar10_${DATA}${CLASSES}k \
+    --input-size 3 224 224 --num-classes 10 \
+    --sched cosine_iter --epochs 1000 --lr 0.01 --weight-decay 0.0001 \
+    --batch-size 48 --opt sgd \
     --warmup-epochs 5 --cooldown-epochs 0 \
     --smoothing 0.1 --aa rand-m9-mstd0.5-inc1 \
     --repeated-aug --mixup 0.8 --cutmix 1.0 \
-    --drop-path 0.1 --reprob 0.25 \
     -j 16 \
-    --pretrained-path ${CP_DIR} --output ${OUT_DIR} \
-    --log-wandb \
-    --val-split val_pytorch
+    --pretrained-path $CP_DIR --output $OUT_DIR \
+    --log-wandb
