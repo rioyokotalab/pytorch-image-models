@@ -7,6 +7,7 @@ from .dataset_factory import create_dataset
 from .loader import create_loader
 from .loader_cpu import create_loader_cpu
 from .mixup import Mixup, FastCollateMixup
+from .mixup_cpu import MixupCpu, FastCollateMixupCpu
 from .parsers import create_parser
 from .real_labels import RealLabelsImagenet
 from .transforms import *

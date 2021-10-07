@@ -323,16 +323,13 @@ def main():
         print("Use GPU: {} for training".format(args.device))
     if args.distributed:
         # initialize torch.distributed using MPI
-        #from mpi4py import MPI
-        #comm = MPI.COMM_WORLD
-        #world_size = comm.Get_size()
-        #rank = comm.Get_rank()
-        #init_method = 'tcp://{}:23456'.format(args.dist_url)
+        from mpi4py import MPI
+        comm = MPI.COMM_WORLD
+        world_size = comm.Get_size()
+        rank = comm.Get_rank()
         master_addr = os.getenv("MASTER_ADDR", default="localhost")
         master_port = os.getenv('MASTER_PORT', default='8888')
         method = "tcp://{}:{}".format(master_addr, master_port)
-        rank = int(os.getenv('OMPI_COMM_WORLD_RANK', '0'))
-        world_size = int(os.getenv('OMPI_COMM_WORLD_SIZE', '1'))
         ngpus_per_node = 1
         device = rank % ngpus_per_node
         torch.distributed.init_process_group(args.dist_backend, init_method=method, world_size=world_size, rank=rank)
