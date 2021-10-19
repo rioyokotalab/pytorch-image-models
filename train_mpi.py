@@ -364,7 +364,7 @@ def main():
         else:
             _logger.warning("You've requested to log metrics to wandb but package not found. "
                             "Metrics not being logged to wandb, try `pip install wandb`")
-
+    
     model = create_model(
         args.model,
         pretrained=args.pretrained,
@@ -552,6 +552,7 @@ def main():
         collate_fn=collate_fn,
         pin_memory=args.pin_mem,
         use_multi_epochs_loader=args.use_multi_epochs_loader,
+        persistent_workers=False,
         repeated_aug=args.repeated_aug,
     )
 
@@ -567,6 +568,7 @@ def main():
         num_workers=args.workers,
         distributed=args.distributed,
         crop_pct=data_config['crop_pct'],
+        persistent_workers=False,
         pin_memory=args.pin_mem,
     )
 
