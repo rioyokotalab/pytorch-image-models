@@ -3,7 +3,7 @@
 #$ -l rt_F=32
 #$ -l h_rt=72:00:00
 #$ -j y
-#$ -o output/pretrain_base_mvf50k_1e-3_$JOB_ID.out
+#$ -o output/pretrain_base_rc50k_1e-3_$JOB_ID.out
 
 # ======== Pyenv/ ========
 export PYENV_ROOT=$HOME/.pyenv
@@ -26,8 +26,8 @@ export NGPUS=128
 export NUM_PROC=4
 mpirun -npernode $NUM_PROC -np $NGPUS \
 python train_with_wds.py /NOT/WORKING \
-    -w --trainshards "/groups/gcd50691/datasets/MVFractal_Shards_50k/mvf_50k-train-{000000..004999}.tar" \
-    --model deit_${MODEL}_patch16_224 --experiment pretrain_deit_${MODEL}_MVfractal${CLS}k_${LR}_shards \
+    -w --trainshards "/groups/gcd50691/datasets/RCDB_Shards_50k/rcdb_50k-train-{000000..004999}.tar" \
+    --model deit_${MODEL}_patch16_224 --experiment pretrain_deit_${MODEL}_RCDB${CLS}k_${LR}_shards \
     --sched cosine_iter --epochs ${EPOCHS} --lr ${LR} --weight-decay 0.05 \
     --batch-size 64 --opt adamw --num-classes ${CLS}000 \
     --warmup-epochs 5 --cooldown-epochs 0 \
