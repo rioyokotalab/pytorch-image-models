@@ -364,7 +364,7 @@ def main():
 
     if args.log_wandb and args.rank == 0:
         if has_wandb:
-            wandb.init(project=args.project_name, entity='yokota-vit', name=args.experiment, config=args)
+            wandb.init(project=args.project_name, entity='yokota-vit', name=args.experiment, group='valid', config=args)
         else:
             _logger.warning("You've requested to log metrics to wandb but package not found. "
                             "Metrics not being logged to wandb, try `pip install wandb`")
