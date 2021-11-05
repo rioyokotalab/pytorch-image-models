@@ -3,7 +3,7 @@
 #$ -l rt_F=4
 #$ -l h_rt=24:00:00
 #$ -j y
-#$ -o output/finetune_tiny_cifar100_mvf21k_$JOB_ID.out
+#$ -o output/finetune_tiny_cars_mvf21k_$JOB_ID.out
 
 # ======== Pyenv/ ========
 export PYENV_ROOT=$HOME/.pyenv
@@ -39,16 +39,16 @@ fi
 export NGPUS=16
 export NPERNODE=4
 mpirun -npernode $NPERNODE -np $NGPUS \
-python train.py /groups/gcd50691/datasets/cifar100 \
-    --model deit_${MODEL}_patch16_224 --experiment finetune_deit_${MODEL}_cifar100_${DATA}${CLASSES}k \
-    --input-size 3 224 224 --num-classes 100 \
+python train.py /groups/gcd50691/datasets/cars \
+    --model deit_${MODEL}_patch16_224 --experiment finetune_deit_${MODEL}_cars_${DATA}${CLASSES}k \
+    --input-size 3 224 224 --num-classes 196 \
     --sched cosine_iter --epochs 1000 --lr 0.01 --weight-decay 0.0001 \
     --batch-size 48 --opt sgd \
-    --warmup-epochs 5 --cooldown-epochs 0 \
+    --warmup-epochs 10 --cooldown-epochs 0 \
     --smoothing 0.1 --aa rand-m9-mstd0.5-inc1 \
     --repeated-aug --mixup 0.8 --cutmix 1.0 \
     -j 16 \
     --output $OUT_DIR \
     --log-wandb \
     --pretrained-path $CP_DIR
-#    --resume ${OUT_DIR}/finetune_deit_${MODEL}_cifar100_${DATA}${CLASSES}k/last.pth.tar
+#    --resume ${OUT_DIR}/finetune_deit_${MODEL}_cars_${DATA}${CLASSES}k/last.pth.tar
