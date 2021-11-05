@@ -20,7 +20,7 @@ export MODEL=base
 export LR=1.0e-3
 export CLS=50
 export EPOCHS=40
-export OUT_DIR=/groups/gcc50533/check_points/${MODEL}/mvf${CLS}k/pre_training
+export OUT_DIR=/groups/gcc50533/check_points/${MODEL}/rc${CLS}k/pre_training
 
 export NGPUS=128
 export NUM_PROC=4
