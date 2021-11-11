@@ -31,7 +31,7 @@ from torch.nn.parallel import DistributedDataParallel as NativeDDP
 
 from timm.data import create_dataset, create_loader, resolve_data_config, Mixup, FastCollateMixup, AugMixDataset
 from timm.models import create_model, safe_model_name, resume_checkpoint, load_checkpoint, \
-    convert_splitbn_model, model_parameters
+    convert_splitbn_model, model_parameters, resume_checkpoint_with_iter
 from timm.utils import *
 from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy, JsdCrossEntropy
 from timm.optim import create_optimizer_v2, optimizer_kwargs
@@ -43,7 +43,6 @@ from timm.data.loader import create_transform_webdataset
 import torch.distributed as dist
 from torchvision import datasets, transforms
 from timm.data.transforms import _pil_interp
-import re
 
 
 def print0(message):
@@ -311,7 +310,7 @@ parser.add_argument('--project-name', default='Fractal', type=str,
                     help='set wandb project name')
 parser.add_argument('--pause', type=int, default=None,
                     help='pause training at the epoch')
-parser.add_argument('--hold-epochs', nargs='+', type=int,
+parser.add_argument('--hold-epochs', type=int,
                     help='epochs of which checkpoint will never be deleted')
 parser.add_argument('--cooldown', action='store_true',
                     help='doing cooldown epochs')
@@ -477,13 +476,13 @@ def main():
     resume_epoch = None
     resume_iter = None
     if args.resume:
-        resume_epoch, resume_iter = resume_checkpoint_with_iter(
+        resume_epoch = resume_checkpoint(
             model, args.resume,
             optimizer=None if args.no_resume_opt else optimizer,
             loss_scaler=None if args.no_resume_opt else loss_scaler,
             log_info=args.rank == 0)
         if args.rank == 0:
-            _logger.info('resume epoch: {}, resume iter: {}'.format(resume_epoch, resume_iter))
+            _logger.info('resume epoch: {}'.format(resume_epoch))
 
 
     # setup exponential moving average of model weights, SWA could be used here too
@@ -593,6 +592,8 @@ def main():
             train_dataset = train_dataset.batched(args.batch_size, partial=False)
 
             dataset_size = args.num_classes * 1000
+            if "ImageNet21k" in args.experiment:
+                dataset_size = 14197060
             number_of_batches = dataset_size // (args.batch_size * args.world_size)
             print0("dataset_size:{}, batch_size:{}, world_size(Total Devices):{}".format(dataset_size, args.batch_size,
                                                                                          args.world_size))
@@ -820,7 +821,7 @@ def main():
                 # save proper checkpoint with eval metric
                 save_metric = train_metrics[eval_metric]
                 best_metric, best_epoch = saver.save_checkpoint(epoch, metric=save_metric)
-                if args.hold_epochs is not None and epoch in args.hold_epochs:
+                if args.hold_epochs is not None and epoch%args.hold_epochs==0:
                     if args.output:
                         checkpoint_file = f'{args.output}/{args.experiment}/checkpoint-{epoch}.pth.tar'
                         target_file = f'{args.output}/{args.experiment}/held-checkpoint-{epoch}.pth.tar'
