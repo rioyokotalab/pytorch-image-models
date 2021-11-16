@@ -103,15 +103,9 @@ if __name__=='__main__':
         max_count=args.max_count,
         num_tars=args.num_tars,
         shard_dir=args.shard_dir,
-        is_training=True,
+        is_training=args.is_training,
     )
-    make_tar(
-        data_root=args.data_root,
-        max_count=args.max_count,
-        num_tars=args.num_tars,
-        shard_dir=args.shard_dir,
-        is_training=False,
-    )
+    
     #for i in range(128):
     #    fname = 'train' if args.is_training else 'eval'
     #    url = f'{args.shard_dir}/cifar10_{fname}_{i:06}.tar'

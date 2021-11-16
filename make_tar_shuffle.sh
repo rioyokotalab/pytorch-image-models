@@ -3,9 +3,6 @@
 #PJM -L "rscgrp=small"
 #PJM -L "elapse=1:00:00"
 
-export PATH=$PATH:/home/nakamura459/jobscheduler2slack
-
-
 export PATH=/home/apps/oss/PyTorch-1.7.0/bin:$PATH
 export CPATH=/home/apps/oss/PyTorch-1.7.0/include:$CPATH
 export LIBRARY_PATH=/home/apps/oss/PyTorch-1.7.0/lib:$LIBRARY_PATH
@@ -17,7 +14,11 @@ export LD_PRELOAD=/usr/lib/FJSVtcs/ple/lib64/libpmix.so # mpi4py実行時に必�
 python make_tar_shuffle.py \
     --data-root cifar10_data \
     --num-tars 128 \
+    --shard-dir cifar10_tar_shuffle
+python make_tar_shuffle.py \
+    --data-root cifar10_data \
+    --num-tars 128 \
     --shard-dir cifar10_tar_shuffle \
     --is-eval
-#post_message "end make tar"
+
 
