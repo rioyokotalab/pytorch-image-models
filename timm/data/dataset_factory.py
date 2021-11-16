@@ -2,7 +2,7 @@ import os
 import cv2
 import torch
 from scipy import io as mat_io
-from skimage import io
+#from skimage import io
 from torch.utils.data import Dataset
 from PIL import Image
 
