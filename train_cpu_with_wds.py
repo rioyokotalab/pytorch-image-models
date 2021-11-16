@@ -35,7 +35,7 @@ from timm.scheduler import create_scheduler
 from timm.utils import ApexScaler, NativeScaler
 
 import webdataset as wds
-from timm.data.loader import create_transform_webdataset
+from timm.data.loader_cpu import create_transform_webdataset_cpu
 import torch.distributed as dist
 from torchvision import datasets, transforms
 from timm.data.transforms import _pil_interp
@@ -341,7 +341,7 @@ def main():
     args, args_text = _parse_args()
 
     args.prefetcher = not args.no_prefetcher
-    args.distributed = int(os.getenv('OMPI_COMM_WORLD_SIZE', '1')) > 1
+    args.distributed = False
     args.local_rank = 0
     args.world_size = 1
     args.rank = 0  # global rank
@@ -536,7 +536,7 @@ def main():
         train_interpolation = args.train_interpolation
         if args.no_aug or not train_interpolation:
             train_interpolation = data_config['interpolation']
-        transform_train = create_transform_webdataset(
+        transform_train = create_transform_webdataset_cpu(
             # dataset_train,
             input_size=data_config['input_size'],
             batch_size=args.batch_size,
