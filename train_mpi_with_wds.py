@@ -578,6 +578,22 @@ def main():
             repeated_aug=args.repeated_aug
         )
 
+        transform_eval = create_transform_webdataset_cpu(
+            #eval_dataset,
+            input_size=data_config['input_size'],
+            batch_size=args.validation_batch_size_multiplier * args.batch_size,
+            is_training=False,
+            use_prefetcher=args.prefetcher,
+            interpolation=data_config['interpolation'],
+            mean=data_config['mean'],
+            std=data_config['std'],
+            num_workers=args.workers,
+            distributed=args.distributed,
+            crop_pct=data_config['crop_pct'],
+            pin_memory=args.pin_mem,
+            persistent_workers=False,
+        )
+
         # transform_train = transforms.Compose([
         #     transforms.Resize(224, _pil_interp('bilinear')),
         #     transforms.CenterCrop(224),
@@ -604,7 +620,7 @@ def main():
                     .shuffle(200000)
                     .decode("pil")
                     .rename(image="input.pyd", target="output.pyd")
-                    .map_dict(image=transform_train)
+                    .map_dict(image=transform_eval)
                     .to_tuple("image", "target")
             )
             # train_dataset = train_dataset.batched(args.bs)
