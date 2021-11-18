@@ -280,6 +280,8 @@ parser.add_argument('--torchscript', dest='torchscript', action='store_true',
                     help='convert model torchscript for inference')
 parser.add_argument('--log-wandb', action='store_true', default=False,
                     help='log training and validation metrics to wandb')
+parser.add_argument('--project-name', default='pytorch-image-models', type=str,
+                    help='set wandb project name')
 parser.add_argument('--fake-separated-loss-log', action='store_true', default=False,
                     help='log loss separated by fake or not')
 
@@ -360,7 +362,7 @@ def main():
 
     if args.log_wandb and args.global_rank == 0:
         if has_wandb:
-            wandb.init(project="pytorch-image-models", name=args.experiment, config=args)
+            wandb.init(project=args.project_name, name=args.experiment, config=args)
         else:
             _logger.warning("You've requested to log metrics to wandb but package not found. "
                             "Metrics not being logged to wandb, try `pip install wandb`")
@@ -778,7 +780,7 @@ def train_one_epoch(
                     'Data: {data_time.val:.3f} ({data_time.avg:.3f})'.format(
                         epoch,
                         batch_idx, len(loader),
-                        100. * batch_idx / last_idx,
+                        100. * batch_idx / (last_idx+1),
                         loss=losses_m,
                         batch_time=batch_time_m,
                         rate=input.size(0) * args.world_size / batch_time_m.val,
