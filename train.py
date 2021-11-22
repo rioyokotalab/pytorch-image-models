@@ -52,8 +52,9 @@ except AttributeError:
 try:
     import wandb
     has_wandb = True
-except ImportError: 
+except ImportError:
     has_wandb = False
+
 
 torch.backends.cudnn.benchmark = True
 _logger = logging.getLogger('train')
@@ -124,7 +125,11 @@ parser.add_argument('--clip-grad', type=float, default=None, metavar='NORM',
                     help='Clip gradient norm (default: None, no clipping)')
 parser.add_argument('--clip-mode', type=str, default='norm',
                     help='Gradient clipping mode. One of ("norm", "value", "agc")')
-
+parser.add_argument('--stat_decay', default=0.95, type=float)
+parser.add_argument('--damping', default=1e-3, type=float)
+parser.add_argument('--kl_clip', default=1e-2, type=float)
+parser.add_argument('--TCov', default=10, type=int)
+parser.add_argument('--TInv', default=100, type=int)
 
 # Learning rate schedule parameters
 parser.add_argument('--sched', default='step', type=str, metavar='SCHEDULER',
@@ -331,8 +336,9 @@ def main():
         master_addr = os.getenv("MASTER_ADDR", default="localhost")
         master_port = os.getenv('MASTER_PORT', default='8888')
         method = "tcp://{}:{}".format(master_addr, master_port)
-        rank = int(os.getenv('OMPI_COMM_WORLD_RANK', '0'))
-        world_size = int(os.getenv('OMPI_COMM_WORLD_SIZE', '1'))
+        method = "tcp://127.0.0.1:2333"
+        rank = int(os.getenv('LOCAL_RANK', '0'))
+        world_size = int(os.getenv('WORLD_SIZE', '1'))
         ngpus_per_node = torch.cuda.device_count()
         device = rank % ngpus_per_node
         torch.cuda.set_device(device)
@@ -491,7 +497,7 @@ def main():
 
     if args.global_rank == 0:
         _logger.info('Scheduled epochs: {}'.format(num_epochs))
-    
+
     # if needed, load dataset from torch
     if args.dataset == 'CIFAR10':
         args.data_dir = f'{args.data_dir}/cifar10_data'
@@ -499,7 +505,7 @@ def main():
         args.data_dir = f'{args.data_dir}/cifar100_data'
     elif args.data_dir == 'CARS':
         args.data_dir = f'{args.data_dir}/cars_data'
-    
+
     # create the train and eval datasets
     dataset_train = create_dataset(
         args.dataset,
@@ -716,7 +722,7 @@ def train_one_epoch(
                 if args.global_rank == 0 and (last_batch or batch_idx % args.log_interval == 0):
                     print(f'fake_target_shape: {fake_target.shape}, origin_target_shape: {origin_target.shape}')
                     print(f'fake_loss: {fake_loss}, origin_loss: {origin_loss}')
-            
+
             loss = loss_fn(output, target)
 
         if not args.distributed:
@@ -729,6 +735,20 @@ def train_one_epoch(
                     origin_losses_m.update(origin_loss.item(), len(origin_target))
 
         optimizer.zero_grad()
+
+        if args.opt in ['kfac', 'ekfac'] and optimizer.steps % optimizer.TCov == 0:
+            # compute true fisher
+            optimizer.acc_stats = True
+            with torch.no_grad():
+                sampled_y = torch.multinomial(torch.nn.functional.softmax(output.cpu().data, dim=1),
+                                              1).squeeze().cuda()
+                if isinstance(loss_fn, SoftTargetCrossEntropy):
+                    sampled_y = nn.functional.one_hot(sampled_y, output.shape[1])
+            loss_sample = loss_fn(output, sampled_y)
+            loss_sample.backward(retain_graph=True)
+            optimizer.acc_stats = False
+            optimizer.zero_grad()  # clear the gradient for computing true-fisher.
+
         if loss_scaler is not None:
             loss_scaler(
                 loss, optimizer,
@@ -760,7 +780,7 @@ def train_one_epoch(
                 dist.all_reduce(fake_nums.data, op=dist.ReduceOp.SUM)
                 if fake_nums.item() > 0:
                     fake_losses_m.update(fake_local_sum_loss.item()/fake_nums.item(), fake_nums.item())
-                
+
                 origin_local_sum_loss = torch.tensor([len(origin_target)*origin_loss.item()], dtype=torch.float32).cuda()
                 dist.all_reduce(origin_local_sum_loss.data, op=dist.ReduceOp.SUM)
                 origin_nums = torch.tensor([len(origin_target)], dtype=torch.int64).cuda()
@@ -811,7 +831,7 @@ def train_one_epoch(
 
     if hasattr(optimizer, 'sync_lookahead'):
         optimizer.sync_lookahead()
-    
+
     if args.fake_separated_loss_log:
         return OrderedDict([('loss', losses_m.avg), ('fake_loss', fake_losses_m.avg), ('origin_loss', origin_losses_m.avg), ('lr', lr)])
     else:

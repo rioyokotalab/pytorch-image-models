@@ -1,0 +1,43 @@
+#!/bin/bash
+#------- qsub option -----------
+#PBS -q SQUID
+#PBS --group=jh210024
+#PBS -N kfac
+#PBS -j o
+#PBS -b 1
+#PBS -l gpunum_job=8
+#PBS -l elapstim_req=20:00:00
+
+module load BaseGPU/2021
+source /sqfs/home/z6b038/vir/py3/bin/activate
+
+export WANDB_MODE=offline
+#export PYTHONPATH=$PYTHONPATH:/sqfs/home/z6b038/pytorch-image-models
+
+cd $PBS_O_WORKDIR
+
+torchrun \
+    --standalone \
+    --nnodes=1 \
+    --nproc_per_node=8 \
+    train.py \
+	/sqfs/work/jh210024/data/ILSVRC2012  \
+        --mixup=0.4 \
+        -b 256 \
+        --model resnet50 \
+        --sched cosine \
+        --opt sgd \
+        --lr 0.8  \
+        --weight-decay=0.0001 \
+        --damping=0.00025 \
+        --momentum=0.9 \
+        --kl_clip=0.001 \
+        --TCov=10 \
+        --TInv=50 \
+        --epochs 80 \
+        --warmup-lr 0.1 \
+        --warmup-epochs 5 \
+        --dist-bn reduce  \
+        --log-wandb \
+        --checkpoint-hist=1 \
+        --output=/sqfs/work/jh210024/z6b038

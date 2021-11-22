@@ -19,6 +19,7 @@ from .rmsprop_tf import RMSpropTF
 from .sgdp import SGDP
 from .adabelief import AdaBelief
 from .sam import SAM
+from .kfac import KFAC
 
 try:
     from apex.optimizers import FusedNovoGrad, FusedAdam, FusedLAMB, FusedSGD
@@ -59,8 +60,19 @@ def optimizer_kwargs(cfg):
         kwargs.update(cfg.opt_args)
     if getattr(cfg, 'nbs', None) is not None:
         kwargs['nbs'] = cfg.nbs
+    if cfg.opt == 'kfac':
+        kwargs['n_distributed'] = torch.cuda.device_count()
+        if getattr(cfg, 'stat_decay', None) is not None:
+            kwargs['stat_decay'] = cfg.stat_decay
+        if getattr(cfg, 'damping', None) is not None:
+            kwargs['damping'] = cfg.damping
+        if getattr(cfg, 'kl_clip', None) is not None:
+            kwargs['kl_clip'] = cfg.kl_clip
+        if getattr(cfg, 'TCov', None) is not None:
+            kwargs['TCov'] = cfg.TCov
+        if getattr(cfg, 'TInv', None) is not None:
+            kwargs['TInv'] = cfg.TInv
     return kwargs
-
 
 def create_optimizer(args, model, filter_bias_and_bn=True):
     """ Legacy optimizer factory for backwards compatibility.
@@ -122,7 +134,7 @@ def create_optimizer_v2(
         opt_args.pop('eps', None)
         optimizer = optim.SGD(parameters, momentum=momentum, nesterov=False, **opt_args)
     elif opt_lower == 'adam':
-        optimizer = optim.Adam(parameters, **opt_args) 
+        optimizer = optim.Adam(parameters, **opt_args)
     elif opt_lower == 'adabelief':
         optimizer = AdaBelief(parameters, rectify=False, **opt_args)
     elif opt_lower == 'adamw':
@@ -131,7 +143,7 @@ def create_optimizer_v2(
         optimizer = Nadam(parameters, **opt_args)
     elif opt_lower == 'radam':
         optimizer = RAdam(parameters, **opt_args)
-    elif opt_lower == 'adamp':        
+    elif opt_lower == 'adamp':
         optimizer = AdamP(parameters, wd_ratio=0.01, nesterov=True, **opt_args)
     elif opt_lower == 'sgdp':
         optimizer = SGDP(parameters, momentum=momentum, nesterov=True, **opt_args)
@@ -168,6 +180,8 @@ def create_optimizer_v2(
         optimizer = FusedNovoGrad(parameters, **opt_args)
     elif opt_lower == 'sam':
         optimizer = SAM(parameters, momentum=momentum, **opt_args)
+    elif opt_lower == 'kfac':
+        optimizer = KFAC(model, **opt_args)
     else:
         assert False and "Invalid optimizer"
         raise ValueError

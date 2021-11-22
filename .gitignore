@@ -112,3 +112,7 @@ output
 pytorch
 vision
 cifar10_data
+wandb
+
+# VIM CTAGS
+tags
