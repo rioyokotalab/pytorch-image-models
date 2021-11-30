@@ -6,6 +6,16 @@ import sys
 import os
 import datetime
 import argparse
+from tqdm import tqdm
+from mpi4py import MPI
+
+comm = MPI.COMM_WORLD
+mpirank = comm.Get_rank()
+mpisize = comm.Get_size()
+
+def print0(s):
+    if mpirank==0:
+        print(s)
 
 def make_parse():
     parser = argparse.ArgumentParser()
@@ -16,6 +26,7 @@ def make_parse():
                         help='Number of tar files')
     parser.add_argument('--shard-dir',type=str,default='cifar10_tar_shuffle')
     parser.add_argument('--is-eval',action='store_true')
+    parser.add_argument('--dataset',type=str,choices=['cifar10','imagenet1k'],default='cifar10')
     return parser
 
 def make_tar(
@@ -23,7 +34,8 @@ def make_tar(
         max_count:int,
         num_tars:int,
         shard_dir:str,
-        is_training:bool
+        is_training:bool,
+        dataset:str
     ):
     """
     data_root: root of data
@@ -34,53 +46,68 @@ def make_tar(
     """
     assert (max_count is None) != (num_tars is None)
     os.makedirs(shard_dir,exist_ok=True)
-    
-    ds = datasets.CIFAR10(
-        root=data_root,
-        train=is_training,
-        download=False,
-    )
+    if dataset=='cifar10':
+        ds = datasets.CIFAR10(
+            root=data_root,
+            train=is_training,
+            download=False,
+        )
+    elif dataset=='imagenet1k':
+        if is_training:
+            #data_root += 'train/'
+            pass
+        else:
+            data_root += 'val/'
+        ds = datasets.ImageFolder(
+            root=data_root
+        )
     num_images = len(ds)
+    print(f'num_images: {num_images}')
     if max_count is None:
         assert num_tars > 0
         assert num_tars <= num_images
         max_count = (num_images + num_tars + 1) // num_tars
         max_count_first_index = num_images - (max_count-1) * num_tars
-        max_counts = []
+        max_counts = [0]
         for i in range(max_count_first_index):
             max_counts.append((i + 1) * max_count)
         for _ in range(num_tars-max_count_first_index):
             max_counts.append(max_counts[-1] + max_count - 1)
         print(f'Generated max_count:{max_count} from num_tars:{num_tars}')
     else:
-        max_counts = []
+        max_counts = [0]
         for i in range(num_images // max_count + 1):
             max_counts.append((i + 1) * max_count)
-    max_counts_index = 0
+        num_tars = len(max_counts)-1
+
+    print0(f'num_tars:{num_tars}')
+    print0(f'max_count:{max_count}')
+    assert num_tars >= mpisize
+    # recommend num_tars % mpisize == 0
+    ntar_per_rank = (num_tars + mpisize - 1) // mpisize
+    start_tar_ind = mpirank * ntar_per_rank
+    end_tar_ind = min(num_tars, (mpirank + 1) * ntar_per_rank)
+    print(f'rank: {mpirank}, tarfile_index: [{start_tar_ind}, {end_tar_ind})')
+
+    fname = 'train' if is_training else 'eval'
+    tarfile_list = [os.path.join(shard_dir,f'{dataset}_{fname}_{sink_index:06}.tar') for sink_index in range(start_tar_ind, end_tar_ind)]
+    
     indexes = list(range(num_images))
+    random.seed(42)
     random.shuffle(indexes)
 
-    sink_index = 0
-    fname = 'train' if is_training else 'eval'
-    sink = wds.TarWriter(f'{shard_dir}/cifar10_{fname}_{sink_index:06}.tar')
-    for i in range(num_images):
-        is_last = i==num_images-1
-        if i%10==0:
-            print(f"{i:6d}\t{datetime.datetime.now().strftime('%Y/%m/%d %H:%M:%S')}", end="\r", flush=True, file=sys.stderr)
-        data_index = indexes[i]
-        input, output = ds[data_index]
-        sink.write({
-            "__key__": "sample%06d" % data_index,
-            "input.pyd": input,
-            "output.pyd": output,
-        })
-        if is_inc_sink_index(i,max_counts, max_counts_index) or is_last:
-            max_counts_index += 1
-            #print(i+1,end=', ',flush=True)
-            sink.close()
-            if not is_last:
-                sink_index += 1
-                sink = wds.TarWriter(f'{shard_dir}/cifar10_{fname}_{sink_index:06}.tar')
+    for ind, target_filename in enumerate(tqdm(tarfile_list)): # rank1->ind:[63,127)
+        global_tar_ind = start_tar_ind + ind
+        global_img_ind_begin = max_counts[global_tar_ind]
+        global_img_ind_end = max_counts[global_tar_ind + 1]
+        with wds.TarWriter(target_filename) as sink:
+            for global_img_ind in range(global_img_ind_begin, global_img_ind_end):
+                inputs, outputs = ds[global_img_ind]
+                sink.write({
+                    "__key__": "sample%06d" % global_img_ind,
+                    "input.pyd": inputs,
+                    "output.pyd": outputs,
+                }))
     
 def is_inc_sink_index(i,max_counts, max_counts_index):
     return max_counts[max_counts_index]-1==i
@@ -104,9 +131,10 @@ if __name__=='__main__':
         num_tars=args.num_tars,
         shard_dir=args.shard_dir,
         is_training=args.is_training,
+        dataset=args.dataset,
     )
     
     #for i in range(128):
     #    fname = 'train' if args.is_training else 'eval'
-    #    url = f'{args.shard_dir}/cifar10_{fname}_{i:06}.tar'
+    #    url = f'{args.shard_dir}/{args.dataset}_{fname}_{i:06}.tar'
     #    print(i,len_tar(url))
