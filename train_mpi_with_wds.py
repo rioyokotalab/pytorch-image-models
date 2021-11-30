@@ -603,11 +603,19 @@ def main():
 
         # transform_train = build_transform(True,args)
         if args.trainshards is not None:
+            if args.dataset=='cifar10':
+                train_dataset_size = 50000
+                eval_dataset_size = 10000
+            elif args.dataset=='imagenet1k':
+                train_dataset_size = 1281167
+                eval_dataset_size = 50000
+            else:
+                assert False
             train_dataset = (
                 # wds.Dataset(args.trainshards, length=num_batches)
                 wds.WebDataset(args.trainshards)
                 # wds.WebDataset(args.trainshards)
-                    .shuffle(200000)
+                    .shuffle(train_dataset_size)
                     .decode("pil")
                     .rename(image="input.pyd", target="output.pyd")
                     .map_dict(image=transform_train)
@@ -617,7 +625,7 @@ def main():
                 # wds.Dataset(args.trainshards, length=num_batches)
                 wds.WebDataset(args.evalshards)
                 # wds.WebDataset(args.trainshards)
-                    .shuffle(200000)
+                    .shuffle(eval_dataset_size)
                     .decode("pil")
                     .rename(image="input.pyd", target="output.pyd")
                     .map_dict(image=transform_eval)
@@ -672,8 +680,6 @@ def main():
             ###train_dataset = train_dataset.batched(args.batch_size, partial=False)
             #images, targets = next(iter(loader_train))
             #print(images.shape, targets.shape)
-            train_dataset_size = 50000
-            eval_dataset_size = 10000
             print(f'batch_size:  {args.batch_size}, world_size:  {args.world_size}')
             print(f'train_dataset_size:  {train_dataset_size}, bs * ws:  {args.batch_size*args.world_size}')
             number_of_train_batches = train_dataset_size // (args.batch_size * args.world_size)
@@ -1050,8 +1056,8 @@ def train_one_epoch(
                         lr=lr,
                         data_time=data_time_m))
 
-                if args.log_wandb:
-                    wandb.log({'iter': num_updates, 'lr': lr})
+                #if args.log_wandb:
+                #    wandb.log({'iter': num_updates, 'lr': lr})
 
                 if args.save_images and output_dir:
                     torchvision.utils.save_image(
