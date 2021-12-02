@@ -111,7 +111,7 @@ parser.add_argument('--gp', default=None, type=str, metavar='POOL',
                     help='Global pool type, one of (fast, avg, max, avgmax, avgmaxc). Model default if None.')
 parser.add_argument('--img-size', type=int, default=None, metavar='N',
                     help='Image patch size (default: None => model default)')
-parser.add_argument('--input-size', default=None, nargs=3, type=int,
+parser.add_argument('--input-size', default=[3,224,224], nargs=3, type=int,
                     metavar='N N N',
                     help='Input all image dimensions (d h w, e.g. --input-size 3 224 224), uses model default if empty')
 parser.add_argument('--crop-pct', default=None, type=float,
@@ -179,7 +179,7 @@ parser.add_argument('--start-epoch', default=None, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
 parser.add_argument('--decay-epochs', type=float, default=30, metavar='N',
                     help='epoch interval to decay LR')
-parser.add_argument('--warmup-epochs', type=int, default=3, metavar='N',
+parser.add_argument('--warmup-epochs', type=int, default=0, metavar='N',
                     help='epochs to warmup LR, if scheduler supports')
 parser.add_argument('--cooldown-epochs', type=int, default=10, metavar='N',
                     help='epochs to cooldown LR at min_lr, after cyclic schedule ends')
@@ -187,6 +187,13 @@ parser.add_argument('--patience-epochs', type=int, default=10, metavar='N',
                     help='patience epochs for Plateau LR scheduler (default: 10')
 parser.add_argument('--decay-rate', '--dr', type=float, default=0.1, metavar='RATE',
                     help='LR decay rate (default: 0.1)')
+parser.add_argument('--minus-momentum', type=float, default=None,
+                    help='momentum = 1-minus_momentum')
+parser.add_argument('--learning-rate-decay-epoch', type=int, default=None,
+                    help='insead of epochs, t_initial of scheduler')
+parser.add_argument('--end-learning-rate-factor', type=float, default=None,
+                    help='min_lr = lr * end_learning_rate_factor')
+
 
 # Augmentation & regularization parameters
 parser.add_argument('--no-aug', action='store_true', default=False,
@@ -320,6 +327,9 @@ parser.add_argument('--dist-backend', default='nccl', type=str,
 
 parser.add_argument('--warmup-iter', default=None, type=int)
 
+# Learning End Conditions
+parser.add_argument('--end-eval-top1-accuracy', default=None, type=float,
+                    help='When accuracy reaches this value, learning ends.')
 
 def _parse_args():
     # Do we have a config file to parse?
@@ -344,6 +354,16 @@ def main():
 
     args.prefetcher = not args.no_prefetcher
     args.distributed = True
+    if args.minus_momentum is not None:
+        assert 0.0 <= args.minus_momentum <= 1.0
+        args.momentum = 1 - args.minus_momentum
+    if args.end_learning_rate_factor is not None:
+        args.min_lr = args.lr * args.end_learning_rate_factor
+    if args.learning_rate_decay_epoch is not None:
+        args.t_initial = args.learning_rate_decay_epoch
+    else:
+        args.t_initial = args.epochs
+
     #args.local_rank = 0
     #args.world_size = 1
     #args.rank = 0  # global rank
@@ -888,7 +908,8 @@ def main():
             checkpoint_dir=output_dir, recovery_dir=output_dir, decreasing=decreasing, max_history=args.checkpoint_hist)
         with open(os.path.join(output_dir, 'args.yaml'), 'w') as f:
             f.write(args_text)
-
+    #print(model.parameters())
+    print0(args)
     try:
         for epoch in range(start_epoch, num_epochs):
 
@@ -930,7 +951,7 @@ def main():
             if output_dir is not None and args.rank == 0:
                 update_summary(
                     epoch, train_metrics, eval_metrics, os.path.join(output_dir, 'summary.csv'),
-                    write_header=best_metric is None, log_wandb=args.log_wandb and has_wandb)
+                    lr_scheduler._get_lr(epoch)[0], write_header=best_metric is None, log_wandb=args.log_wandb and has_wandb)
 
             if saver is not None:
                 # save proper checkpoint with eval metric
@@ -947,6 +968,26 @@ def main():
 
             if args.pause is not None:
                 if epoch - start_epoch >= args.pause:
+                    break
+            if args.end_eval_top1_accuracy is not None:
+                if args.end_eval_top1_accuracy <= eval_metrics['top1']/100:
+                    _logger.info(
+                        'eval top1 accuracy: {0} reachs '
+                        'args.end-eval-top1-accuracy: {1},'
+                        'end learning.'.format(
+                        eval_metrics['top1']/100, args.end_eval_top1_accuracy))
+                    if args.log_wandb:
+                        #reach_accuracy = True
+                        metrics = OrderedDict([('end_steps', epoch * loader_train.length)])
+                        wandb.log(metrics)
+                    break
+                if math.isnan(train_metrics['loss']):
+                    if args.rank == 0:
+                        _logger.info(f'train loss is nan. stop learning.')
+                    break
+                elif train_metrics['loss'] > 100.0:
+                    if args.rank == 0:
+                        _logger.info(f'train loss is {train_metrics["loss"]. stop learning.}')
                     break
 
     except KeyboardInterrupt:

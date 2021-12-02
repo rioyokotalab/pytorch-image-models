@@ -25,7 +25,7 @@ def create_scheduler(args, optimizer):
     if args.sched == 'cosine':
         lr_scheduler = CosineLRScheduler(
             optimizer,
-            t_initial=num_epochs,
+            t_initial=args.t_initial,
             t_mul=getattr(args, 'lr_cycle_mul', 1.),
             lr_min=args.min_lr,
             decay_rate=args.decay_rate,
@@ -42,7 +42,7 @@ def create_scheduler(args, optimizer):
     elif args.sched == 'tanh':
         lr_scheduler = TanhLRScheduler(
             optimizer,
-            t_initial=num_epochs,
+            t_initial=args.t_initial,
             t_mul=getattr(args, 'lr_cycle_mul', 1.),
             lr_min=args.min_lr,
             warmup_lr_init=args.warmup_lr,
