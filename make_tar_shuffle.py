@@ -107,7 +107,7 @@ def make_tar(
                     "__key__": "sample%06d" % global_img_ind,
                     "input.pyd": inputs,
                     "output.pyd": outputs,
-                }))
+                })
     
 def is_inc_sink_index(i,max_counts, max_counts_index):
     return max_counts[max_counts_index]-1==i
