@@ -19,6 +19,7 @@ from collections import OrderedDict
 from contextlib import suppress
 from datetime import datetime
 import shutil
+import math
 
 import torch
 import torch.nn as nn
@@ -181,7 +182,7 @@ parser.add_argument('--decay-epochs', type=float, default=30, metavar='N',
                     help='epoch interval to decay LR')
 parser.add_argument('--warmup-epochs', type=int, default=0, metavar='N',
                     help='epochs to warmup LR, if scheduler supports')
-parser.add_argument('--cooldown-epochs', type=int, default=10, metavar='N',
+parser.add_argument('--cooldown-epochs', type=int, default=0, metavar='N',
                     help='epochs to cooldown LR at min_lr, after cyclic schedule ends')
 parser.add_argument('--patience-epochs', type=int, default=10, metavar='N',
                     help='patience epochs for Plateau LR scheduler (default: 10')
@@ -348,9 +349,16 @@ def _parse_args():
     return args, args_text
 
 
+def fix_path(args):
+    args = args._replace(pretrained_path=args.pretrained_path.replace('/home/', '/vol0003/'))
+    args = args._replace(trainshards=args.trainshards.replace('/home/', '/vol0003/'))
+    args = args._replace(evalshards=args.evalshards.replace('/home/', '/vol0003/'))
+    return args
+
 def main():
     setup_default_logging()
     args, args_text = _parse_args()
+    #args = fix_path(args)
 
     args.prefetcher = not args.no_prefetcher
     args.distributed = True
@@ -389,8 +397,8 @@ def main():
         args.rank = rank
         args.device = device
         #torch.cuda.set_device(args.local_rank)
-        torch.distributed.init_process_group(backend=args.dist_backend, init_method=method, world_size=world_size,
-                                             rank=rank)
+        torch.distributed.init_process_group(backend=args.dist_backend, init_method=method, world_size=-1,
+                                             rank=-1)
         #args.rank = rank
         args.world_size = world_size
         _logger.info('Training in distributed mode with multiple processes, 1 GPU per process. Process %d, total %d.'
@@ -702,8 +710,8 @@ def main():
             #print(images.shape, targets.shape)
             print(f'batch_size:  {args.batch_size}, world_size:  {args.world_size}')
             print(f'train_dataset_size:  {train_dataset_size}, bs * ws:  {args.batch_size*args.world_size}')
-            number_of_train_batches = train_dataset_size // (args.batch_size * args.world_size)
-            number_of_eval_batches = eval_dataset_size // (args.batch_size * args.world_size)
+            number_of_train_batches = train_dataset_size // (args.batch_size * args.world_size) # train is floor
+            number_of_eval_batches = (eval_dataset_size + args.batch_size * args.world_size - 1) // (args.batch_size * args.world_size) # eval is ceil
             print0("dataset_size:{}, batch_size:{}, world_size(Total Devices):{}".format(train_dataset_size, args.batch_size,
                                                                                          args.world_size))
             print0("-- --> Number of batches to be processed per GPU = {}".format(number_of_train_batches))
@@ -910,6 +918,7 @@ def main():
             f.write(args_text)
     #print(model.parameters())
     print0(args)
+    is_divergent_loss = False
     try:
         for epoch in range(start_epoch, num_epochs):
 
@@ -970,30 +979,50 @@ def main():
                 if epoch - start_epoch >= args.pause:
                     break
             if args.end_eval_top1_accuracy is not None:
-                if args.end_eval_top1_accuracy <= eval_metrics['top1']/100:
-                    _logger.info(
-                        'eval top1 accuracy: {0} reachs '
-                        'args.end-eval-top1-accuracy: {1},'
-                        'end learning.'.format(
-                        eval_metrics['top1']/100, args.end_eval_top1_accuracy))
-                    if args.log_wandb:
+                # `args.end_eval_top1_accuracy <= eval_metrics['top1']/100`がrankごとに不一致なのでrank0に合わせる
+                if args.rank==0:
+                    if args.end_eval_top1_accuracy <= eval_metrics['top1']/100:
+                        tmp_is_finished = 1
+                    else:
+                        tmp_is_finished = 0
+                    is_finished = torch.tensor([tmp_is_finished],dtype=torch.int)
+                else:
+                    is_finished = torch.empty((1),dtype=torch.int)
+                dist.broadcast(tensor=is_finished, src=0)
+                dist.barrier()
+                if is_finished[0].item():
+                    if args.rank==0:
+                        _logger.info(
+                            'eval top1 accuracy: {0} reachs '
+                            'args.end-eval-top1-accuracy: {1},'
+                            'end learning.'.format(
+                            eval_metrics['top1']/100, args.end_eval_top1_accuracy))
+                    dist.barrier()
+                    if args.log_wandb and args.rank==0:
                         #reach_accuracy = True
                         metrics = OrderedDict([('end_steps', epoch * loader_train.length)])
                         wandb.log(metrics)
+                    dist.barrier()
                     break
                 if math.isnan(train_metrics['loss']):
                     if args.rank == 0:
                         _logger.info(f'train loss is nan. stop learning.')
+                        is_divergent_loss = True
                     break
                 elif train_metrics['loss'] > 100.0:
                     if args.rank == 0:
-                        _logger.info(f'train loss is {train_metrics["loss"]. stop learning.}')
+                        _logger.info(f'train loss is {train_metrics["loss"]}. stop learning.')
+                        is_divergent_loss = True
                     break
 
     except KeyboardInterrupt:
         pass
     if best_metric is not None:
         _logger.info('*** Best metric: {0} (epoch {1})'.format(best_metric, best_epoch))
+    if args.rank == 0 and args.log_wandb:
+        metrics = OrderedDict([('divergent_loss', is_divergent_loss)])
+        wandb.log(metrics)
+    dist.barrier()
 
 
 def train_one_epoch(
@@ -1069,6 +1098,8 @@ def train_one_epoch(
             model_ema.update(model)
 
         #torch.cuda.synchronize()
+        dist.barrier()
+
         num_updates += 1
         batch_time_m.update(time.time() - end)
         if last_batch or batch_idx % args.log_interval == 0:
@@ -1192,6 +1223,7 @@ def train_one_epoch_web(
             model_ema.update(model)
 
         #torch.cuda.synchronize()
+
         num_updates += 1
         batch_time_m.update(time.time() - end)
         if last_batch or batch_idx % args.log_interval == 0:
@@ -1285,6 +1317,8 @@ def validate(model, loader, loss_fn, args, amp_autocast=suppress, log_suffix='')
                 acc5 = reduce_tensor(acc5, args.world_size)
             else:
                 reduced_loss = loss.data
+
+            dist.barrier()
 
             losses_m.update(reduced_loss.item(), input.size(0))
             top1_m.update(acc1.item(), output.size(0))
