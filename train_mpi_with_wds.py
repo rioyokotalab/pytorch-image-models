@@ -26,7 +26,7 @@ import torch.nn as nn
 import torchvision.utils
 from torch.nn.parallel import DistributedDataParallel as NativeDDP
 
-from timm.data import create_dataset, create_loader_cpu, resolve_data_config, Mixup, FastCollateMixup, AugMixDataset
+from timm.data import create_dataset, create_loader_cpu, resolve_data_config, MixupCpu, FastCollateMixupCpu, AugMixDataset
 from timm.models import create_model, safe_model_name, resume_checkpoint, load_checkpoint, \
     convert_splitbn_model, model_parameters
 from timm.utils import *
@@ -144,6 +144,10 @@ parser.add_argument('--opt-eps', default=None, type=float, metavar='EPSILON',
                     help='Optimizer Epsilon (default: None, use opt default)')
 parser.add_argument('--opt-betas', default=None, type=float, nargs='+', metavar='BETA',
                     help='Optimizer Betas (default: None, use opt default)')
+parser.add_argument('--opt-minus-beta1', default=None, type=float, metavar='MBETA1',
+                    help='Optimizer Beta1 = 1 - opt_minus_beta1 (default: None, use opt default)')
+parser.add_argument('--opt-minus-beta2', default=None, type=float, metavar='MBETA2',
+                    help='Optimizer Beta2 = 1 = opt_minus_beta2 (default: None, use opt default)')
 parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
                     help='Optimizer momentum (default: 0.9)')
 parser.add_argument('--weight-decay', type=float, default=0.0001,
@@ -371,6 +375,8 @@ def main():
         args.t_initial = args.learning_rate_decay_epoch
     else:
         args.t_initial = args.epochs
+    if args.opt_betas is None and args.opt_minus_beta1 is not None and args.opt_minus_beta2 is not None:
+        args.opt_betas = (1-args.opt_minus_beta1, 1-args.opt_minus_beta2)
 
     #args.local_rank = 0
     #args.world_size = 1
@@ -563,9 +569,9 @@ def main():
                 label_smoothing=args.smoothing, num_classes=args.num_classes)
             if args.prefetcher:
                 assert not num_aug_splits  # collate conflict (need to support deinterleaving in collate mixup)
-                collate_fn = FastCollateMixup(**mixup_args)
+                collate_fn = FastCollateMixupCpu(**mixup_args)
             else:
-                mixup_fn = Mixup(**mixup_args)
+                mixup_fn = MixupCpu(**mixup_args)
 
         # wrap dataset in AugMix helper
         if num_aug_splits > 1:
@@ -785,9 +791,9 @@ def main():
                 label_smoothing=args.smoothing, num_classes=args.num_classes)
             if args.prefetcher:
                 assert not num_aug_splits  # collate conflict (need to support deinterleaving in collate mixup)
-                collate_fn = FastCollateMixup(**mixup_args)
+                collate_fn = FastCollateMixupCpu(**mixup_args)
             else:
-                mixup_fn = Mixup(**mixup_args)
+                mixup_fn = MixupCpu(**mixup_args)
 
         # wrap dataset in AugMix helper
         if num_aug_splits > 1:

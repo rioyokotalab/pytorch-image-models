@@ -72,7 +72,7 @@ class PrefetchLoaderCPU:
             self.std = self.std.half()
         if re_prob > 0.:
             self.random_erasing = RandomErasing(
-                probability=re_prob, mode=re_mode, max_count=re_count, num_splits=re_num_splits)
+                probability=re_prob, mode=re_mode, max_count=re_count, num_splits=re_num_splits, device='cpu')
         else:
             self.random_erasing = None
 
