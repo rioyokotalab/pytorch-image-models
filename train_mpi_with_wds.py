@@ -637,7 +637,7 @@ def main():
 
         # transform_train = build_transform(True,args)
         if args.trainshards is not None:
-            if args.dataset=='cifar10':
+            if args.dataset=='cifar10' or args.dataset=='cifar100':
                 train_dataset_size = 50000
                 eval_dataset_size = 10000
             elif args.dataset=='imagenet1k':
@@ -925,6 +925,7 @@ def main():
     #print(model.parameters())
     print0(args)
     is_divergent_loss = False
+    reach_accuracy = False
     try:
         for epoch in range(start_epoch, num_epochs):
 
@@ -997,6 +998,7 @@ def main():
                 dist.broadcast(tensor=is_finished, src=0)
                 dist.barrier()
                 if is_finished[0].item():
+                    reach_accuracy = True
                     if args.rank==0:
                         _logger.info(
                             'eval top1 accuracy: {0} reachs '
@@ -1006,7 +1008,7 @@ def main():
                     dist.barrier()
                     if args.log_wandb and args.rank==0:
                         #reach_accuracy = True
-                        metrics = OrderedDict([('end_steps', epoch * loader_train.length)])
+                        metrics = OrderedDict([('end_steps', (epoch + 1) * loader_train.length)])
                         wandb.log(metrics)
                     dist.barrier()
                     break
@@ -1027,6 +1029,9 @@ def main():
         _logger.info('*** Best metric: {0} (epoch {1})'.format(best_metric, best_epoch))
     if args.rank == 0 and args.log_wandb:
         metrics = OrderedDict([('divergent_loss', is_divergent_loss)])
+        wandb.log(metrics)
+    if args.rank == 0 and args.log_wandb and not reach_accuracy and not is_divergent_loss:
+        metrics = OrderedDict([('end_steps', (num_epochs + 1) * loader_train.length)])
         wandb.log(metrics)
     dist.barrier()
 
