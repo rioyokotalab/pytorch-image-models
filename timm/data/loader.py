@@ -215,9 +215,7 @@ def create_loader(
                     sampler = RASamplerSplit(dataset, batch_size)
                 else:
                     sampler = RASampler(dataset)
-            else:
-                sampler = torch.utils.data.DistributedSampler(dataset)
-            if num_aug_repeats:
+            elif num_aug_repeats:
                 sampler = RepeatAugSampler(dataset, num_repeats=num_aug_repeats)
             else:
                 sampler = torch.utils.data.distributed.DistributedSampler(dataset)

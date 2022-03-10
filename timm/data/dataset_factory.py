@@ -110,7 +110,7 @@ def create_dataset(
             transform=form,
             download=True
         )
-    if name.startswith('torch/'):
+    elif name.startswith('torch/'):
         name = name.split('/', 2)[-1]
         torch_kwargs = dict(root=root, download=download, **kwargs)
         if name in _TORCH_BASIC_DS:
