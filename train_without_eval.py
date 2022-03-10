@@ -283,6 +283,8 @@ parser.add_argument('--log-wandb', action='store_true', default=False,
                     help='log training and validation metrics to wandb')
 parser.add_argument('--project-name', default='Fractal', type=str,
                     help='set wandb project name')
+parser.add_argument('--wandb-group', default='pretrain', type=str,
+                    help='set wandb group name')
 parser.add_argument('--pause', type=int, default=None,
                     help='pause training at the epoch')
 parser.add_argument('--hold-epochs', type=int, default=None,
@@ -364,7 +366,7 @@ def main():
 
     if args.log_wandb and args.rank == 0:
         if has_wandb:
-            wandb.init(project=args.project_name, entity='yokota-vit', name=args.experiment, group='valid', config=args)
+            wandb.init(project=args.project_name, entity='yokota-vit', name=args.experiment, group=args.wandb_group, config=args)
         else:
             _logger.warning("You've requested to log metrics to wandb but package not found. "
                             "Metrics not being logged to wandb, try `pip install wandb`")

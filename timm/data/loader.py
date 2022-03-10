@@ -301,59 +301,7 @@ def create_transform_webdataset(
 
 
     return transform
-
-    sampler = None
-    if distributed and not isinstance(dataset, torch.utils.data.IterableDataset):
-        if is_training:
-            if repeated_aug:
-                if split_fake:
-                    sampler = RASamplerSplit(dataset, batch_size)
-                else:
-                    sampler = RASampler(dataset)
-            else:
-                sampler = torch.utils.data.DistributedSampler(dataset)
-        else:
-            # This will add extra duplicate entries to result in equal num
-            # of samples per-process, will slightly alter validation results
-            sampler = OrderedDistributedSampler(dataset)
-
-    if collate_fn is None:
-        collate_fn = fast_collate if use_prefetcher else torch.utils.data.dataloader.default_collate
-
-    loader_class = torch.utils.data.DataLoader
-
-    if use_multi_epochs_loader:
-        loader_class = MultiEpochsDataLoader
-
-    loader_args = dict(
-        batch_size=batch_size,
-        shuffle=not isinstance(dataset, torch.utils.data.IterableDataset) and sampler is None and is_training,
-        num_workers=num_workers,
-        sampler=sampler,
-        collate_fn=collate_fn,
-        pin_memory=pin_memory,
-        drop_last=is_training,
-        persistent_workers=persistent_workers)
-    try:
-        loader = loader_class(dataset, **loader_args)
-    except TypeError as e:
-        loader_args.pop('persistent_workers')  # only in Pytorch 1.7+
-        loader = loader_class(dataset, **loader_args)
-    if use_prefetcher:
-        prefetch_re_prob = re_prob if is_training and not no_aug else 0.
-        loader = PrefetchLoader(
-            loader,
-            mean=mean,
-            std=std,
-            fp16=fp16,
-            re_prob=prefetch_re_prob,
-            re_mode=re_mode,
-            re_count=re_count,
-            re_num_splits=re_num_splits
-        )
-
-    return loader
-
+    
 
 class MultiEpochsDataLoader(torch.utils.data.DataLoader):
 

@@ -566,6 +566,7 @@ def main():
         update_iter = (args.lr - args.min_lr) / (num_iters - warmup_t)
         if warmup_t != 0:
             warmup_update_iter = (args.lr - args.warmup_lr) / warmup_t
+            # if start_epoch == 0 and start_iter == -1: # for resume
             for param_group in optimizer.param_groups:
                 param_group['lr'] = args.warmup_lr
     else:
