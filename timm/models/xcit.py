@@ -1,10 +1,12 @@
 """ Cross-Covariance Image Transformer (XCiT) in PyTorch
 
-Same as the official implementation, with some minor adaptations.
-    - https://github.com/facebookresearch/xcit/blob/master/xcit.py
-
 Paper:
     - https://arxiv.org/abs/2106.09681
+
+Same as the official implementation, with some minor adaptations, original copyright below
+    - https://github.com/facebookresearch/xcit/blob/master/xcit.py
+
+Modifications and additions for timm hacked together by / Copyright 2021, Ross Wightman
 """
 # Copyright (c) 2015-present, Facebook, Inc.
 # All rights reserved.
@@ -21,6 +23,7 @@ from .vision_transformer import _cfg, Mlp
 from .registry import register_model
 from .layers import DropPath, trunc_normal_, to_2tuple
 from .cait import ClassAttn
+from .fx_features import register_notrace_module
 
 
 def _cfg(url='', **kwargs):
@@ -97,6 +100,7 @@ default_cfgs = {
 }
 
 
+@register_notrace_module  # reason: FX can't symbolically trace torch.arange in forward method
 class PositionalEncodingFourier(nn.Module):
     """
     Positional encoding relying on a fourier kernel matching the one used in the "Attention is all of Need" paper.
@@ -267,7 +271,7 @@ class XCA(nn.Module):
         B, N, C = x.shape
         # Result of next line is (qkv, B, num (H)eads,  (C')hannels per head, N)
         qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 4, 1)
-        q, k, v = qkv[0], qkv[1], qkv[2]  # make torchscript happy (cannot use tensor as tuple)
+        q, k, v = qkv.unbind(0)  # make torchscript happy (cannot use tensor as tuple)
         
         # Paper section 3.2 l2-Normalization and temperature scaling
         q = torch.nn.functional.normalize(q, dim=-1)

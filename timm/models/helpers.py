@@ -11,10 +11,11 @@ from typing import Any, Callable, Optional, Tuple
 
 import torch
 import torch.nn as nn
-
+from torch.hub import load_state_dict_from_url
 
 from .features import FeatureListNet, FeatureDictNet, FeatureHookNet
-from .hub import has_hf_hub, download_cached_file, load_state_dict_from_hf, load_state_dict_from_url
+from .fx_features import FeatureGraphNet
+from .hub import has_hf_hub, download_cached_file, load_state_dict_from_hf
 from .layers import Conv2dSame, Linear
 
 
@@ -24,13 +25,20 @@ _logger = logging.getLogger(__name__)
 def load_state_dict(checkpoint_path, use_ema=False):
     if checkpoint_path and os.path.isfile(checkpoint_path):
         checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        state_dict_key = 'state_dict'
+        state_dict_key = ''
         if isinstance(checkpoint, dict):
-            if use_ema and 'state_dict_ema' in checkpoint:
+            if use_ema and checkpoint.get('state_dict_ema', None) is not None:
                 state_dict_key = 'state_dict_ema'
-        if state_dict_key and state_dict_key in checkpoint:
+            elif use_ema and checkpoint.get('model_ema', None) is not None:
+                state_dict_key = 'model_ema'
+            elif 'state_dict' in checkpoint:
+                state_dict_key = 'state_dict'
+            elif 'model' in checkpoint:
+                state_dict_key = 'model'
+        if state_dict_key:
+            state_dict = checkpoint[state_dict_key]
             new_state_dict = OrderedDict()
-            for k, v in checkpoint[state_dict_key].items():
+            for k, v in state_dict.items():
                 # strip `module.` prefix
                 name = k[7:] if k.startswith('module') else k
                 new_state_dict[name] = v
@@ -248,12 +256,12 @@ def load_pretrained(model, default_cfg=None, num_classes=1000, in_chans=3, filte
     if not pretrained_url and not hf_hub_id:
         _logger.warning("No pretrained weights exist for this model. Using random initialization.")
         return
-    if hf_hub_id and has_hf_hub(necessary=not pretrained_url):
-        _logger.info(f'Loading pretrained weights from Hugging Face hub ({hf_hub_id})')
-        state_dict = load_state_dict_from_hf(hf_hub_id)
-    else:
+    if pretrained_url:
         _logger.info(f'Loading pretrained weights from url ({pretrained_url})')
         state_dict = load_state_dict_from_url(pretrained_url, progress=progress, map_location='cpu')
+    elif hf_hub_id and has_hf_hub(necessary=True):
+        _logger.info(f'Loading pretrained weights from Hugging Face hub ({hf_hub_id})')
+        state_dict = load_state_dict_from_hf(hf_hub_id)
     if filter_fn is not None:
         # for backwards compat with filter fn that take one arg, try one first, the two
         try:
@@ -285,8 +293,8 @@ def load_pretrained(model, default_cfg=None, num_classes=1000, in_chans=3, filte
         if num_classes != default_cfg['num_classes']:
             for classifier_name in classifiers:
                 # completely discard fully connected if model num_classes doesn't match pretrained weights
-                del state_dict[classifier_name + '.weight']
-                del state_dict[classifier_name + '.bias']
+                state_dict.pop(classifier_name + '.weight', None)
+                state_dict.pop(classifier_name + '.bias', None)
             strict = False
         elif label_offset > 0:
             for classifier_name in classifiers:
@@ -542,6 +550,8 @@ def build_model_with_cfg(
                 feature_cls = feature_cls.lower()
                 if 'hook' in feature_cls:
                     feature_cls = FeatureHookNet
+                elif feature_cls == 'fx':
+                    feature_cls = FeatureGraphNet
                 else:
                     assert False, f'Unknown feature class {feature_cls}'
         model = feature_cls(model, **feature_cfg)

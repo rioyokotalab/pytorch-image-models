@@ -4,7 +4,8 @@ This started as a copy of https://github.com/pytorch/vision 'resnet.py' (BSD-3-C
 additional dropout and dynamic global avg/max pool.
 
 ResNeXt, SE-ResNeXt, SENet, and MXNet Gluon stem/downsample variants, tiered stems added by Ross Wightman
-Copyright 2020 Ross Wightman
+
+Copyright 2019, Ross Wightman
 """
 import math
 from functools import partial
@@ -15,7 +16,7 @@ import torch.nn.functional as F
 
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from .helpers import build_model_with_cfg
-from .layers import DropBlock2d, DropPath, AvgPool2dSame, BlurPool2d, create_attn, get_attn, create_classifier
+from .layers import DropBlock2d, DropPath, AvgPool2dSame, BlurPool2d, GroupNorm, create_attn, get_attn, create_classifier
 from .registry import register_model
 
 __all__ = ['ResNet', 'BasicBlock', 'Bottleneck']  # model_registry will add each entrypoint fn to this
@@ -50,23 +51,27 @@ default_cfgs = {
         url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/resnet26d-69e92c46.pth',
         interpolation='bicubic', first_conv='conv1.0'),
     'resnet26t': _cfg(
-        url='',
-        interpolation='bicubic', first_conv='conv1.0', input_size=(3, 256, 256), pool_size=(8, 8)),
+        url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-attn-weights/resnet26t_256_ra2-6f6fa748.pth',
+        interpolation='bicubic', first_conv='conv1.0', input_size=(3, 256, 256), pool_size=(8, 8), crop_pct=0.94),
     'resnet50': _cfg(
-        url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/resnet50_ram-a26f946b.pth',
-        interpolation='bicubic'),
+        url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-rsb-weights/resnet50_a1_0-14fe96d1.pth',
+        interpolation='bicubic', crop_pct=0.95),
     'resnet50d': _cfg(
         url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/resnet50d_ra2-464e36ba.pth',
         interpolation='bicubic', first_conv='conv1.0'),
     'resnet50t': _cfg(
         url='',
         interpolation='bicubic', first_conv='conv1.0'),
-    'resnet101': _cfg(url='', interpolation='bicubic'),
+    'resnet101': _cfg(
+        url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-rsb-weights/resnet101_a1h-36d3f2aa.pth',
+        interpolation='bicubic', crop_pct=0.95),
     'resnet101d': _cfg(
         url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/resnet101d_ra2-2803ffab.pth',
         interpolation='bicubic', first_conv='conv1.0', input_size=(3, 256, 256), pool_size=(8, 8),
         crop_pct=1.0, test_input_size=(3, 320, 320)),
-    'resnet152': _cfg(url='', interpolation='bicubic'),
+    'resnet152': _cfg(
+        url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-rsb-weights/resnet152_a1h-dc400468.pth',
+        interpolation='bicubic', crop_pct=0.95),
     'resnet152d': _cfg(
         url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/resnet152d_ra2-5cac0439.pth',
         interpolation='bicubic', first_conv='conv1.0', input_size=(3, 256, 256), pool_size=(8, 8),
@@ -85,10 +90,15 @@ default_cfgs = {
         interpolation='bicubic'),
     'wide_resnet101_2': _cfg(url='https://download.pytorch.org/models/wide_resnet101_2-32ee1156.pth'),
 
+    # ResNets w/ alternative norm layers
+    'resnet50_gn': _cfg(
+        url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-rsb-weights/resnet50_gn_a1h2-8fe6c4d0.pth',
+        crop_pct=0.94, interpolation='bicubic'),
+
     # ResNeXt
     'resnext50_32x4d': _cfg(
-        url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/resnext50_32x4d_ra-d733960d.pth',
-        interpolation='bicubic'),
+        url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-rsb-weights/resnext50_32x4d_a1h-0146ab0a.pth',
+        interpolation='bicubic', crop_pct=0.95),
     'resnext50d_32x4d': _cfg(
         url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/resnext50d_32x4d-103e99f8.pth',
         interpolation='bicubic',
@@ -241,6 +251,21 @@ default_cfgs = {
     'resnetblur50': _cfg(
         url='https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-weights/resnetblur50-84f4748f.pth',
         interpolation='bicubic'),
+    'resnetblur50d': _cfg(
+        url='',
+        interpolation='bicubic', first_conv='conv1.0'),
+    'resnetblur101d': _cfg(
+        url='',
+        interpolation='bicubic', first_conv='conv1.0'),
+    'resnetaa50d': _cfg(
+        url='',
+        interpolation='bicubic', first_conv='conv1.0'),
+    'resnetaa101d': _cfg(
+        url='',
+        interpolation='bicubic', first_conv='conv1.0'),
+    'seresnetaa50d': _cfg(
+        url='',
+        interpolation='bicubic', first_conv='conv1.0'),
 
     # ResNet-RS models
     'resnetrs50': _cfg(
@@ -279,6 +304,12 @@ def get_padding(kernel_size, stride, dilation=1):
     return padding
 
 
+def create_aa(aa_layer, channels, stride=2, enable=True):
+    if not aa_layer or not enable:
+        return None
+    return aa_layer(stride) if issubclass(aa_layer, nn.AvgPool2d) else aa_layer(channels=channels, stride=stride)
+
+
 class BasicBlock(nn.Module):
     expansion = 1
 
@@ -299,7 +330,7 @@ class BasicBlock(nn.Module):
             dilation=first_dilation, bias=False)
         self.bn1 = norm_layer(first_planes)
         self.act1 = act_layer(inplace=True)
-        self.aa = aa_layer(channels=first_planes, stride=stride) if use_aa else None
+        self.aa = create_aa(aa_layer, channels=first_planes, stride=stride, enable=use_aa)
 
         self.conv2 = nn.Conv2d(
             first_planes, outplanes, kernel_size=3, padding=dilation, dilation=dilation, bias=False)
@@ -370,7 +401,7 @@ class Bottleneck(nn.Module):
             padding=first_dilation, dilation=first_dilation, groups=cardinality, bias=False)
         self.bn2 = norm_layer(width)
         self.act2 = act_layer(inplace=True)
-        self.aa = aa_layer(channels=width, stride=stride) if use_aa else None
+        self.aa = create_aa(aa_layer, channels=width, stride=stride, enable=use_aa)
 
         self.conv3 = nn.Conv2d(width, outplanes, kernel_size=1, bias=False)
         self.bn3 = norm_layer(outplanes)
@@ -607,19 +638,22 @@ class ResNet(nn.Module):
         self.act1 = act_layer(inplace=True)
         self.feature_info = [dict(num_chs=inplanes, reduction=2, module='act1')]
 
-        # Stem Pooling
+        # Stem pooling. The name 'maxpool' remains for weight compatibility.
         if replace_stem_pool:
             self.maxpool = nn.Sequential(*filter(None, [
                 nn.Conv2d(inplanes, inplanes, 3, stride=1 if aa_layer else 2, padding=1, bias=False),
-                aa_layer(channels=inplanes, stride=2) if aa_layer else None,
+                create_aa(aa_layer, channels=inplanes, stride=2),
                 norm_layer(inplanes),
                 act_layer(inplace=True)
             ]))
         else:
             if aa_layer is not None:
-                self.maxpool = nn.Sequential(*[
-                    nn.MaxPool2d(kernel_size=3, stride=1, padding=1),
-                    aa_layer(channels=inplanes, stride=2)])
+                if issubclass(aa_layer, nn.AvgPool2d):
+                    self.maxpool = aa_layer(2)
+                else:
+                    self.maxpool = nn.Sequential(*[
+                        nn.MaxPool2d(kernel_size=3, stride=1, padding=1),
+                        aa_layer(channels=inplanes, stride=2)])
             else:
                 self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
@@ -875,6 +909,14 @@ def wide_resnet101_2(pretrained=False, **kwargs):
     """
     model_args = dict(block=Bottleneck, layers=[3, 4, 23, 3], base_width=128, **kwargs)
     return _create_resnet('wide_resnet101_2', pretrained, **model_args)
+
+
+@register_model
+def resnet50_gn(pretrained=False, **kwargs):
+    """Constructs a ResNet-50 model w/ GroupNorm
+    """
+    model_args = dict(block=Bottleneck, layers=[3, 4, 6, 3],  **kwargs)
+    return _create_resnet('resnet50_gn', pretrained, norm_layer=GroupNorm, **model_args)
 
 
 @register_model
@@ -1322,6 +1364,56 @@ def resnetblur50(pretrained=False, **kwargs):
     """
     model_args = dict(block=Bottleneck, layers=[3, 4, 6, 3], aa_layer=BlurPool2d, **kwargs)
     return _create_resnet('resnetblur50', pretrained, **model_args)
+
+
+@register_model
+def resnetblur50d(pretrained=False, **kwargs):
+    """Constructs a ResNet-50-D model with blur anti-aliasing
+    """
+    model_args = dict(
+        block=Bottleneck, layers=[3, 4, 6, 3], aa_layer=BlurPool2d,
+        stem_width=32, stem_type='deep', avg_down=True, **kwargs)
+    return _create_resnet('resnetblur50d', pretrained, **model_args)
+
+
+@register_model
+def resnetblur101d(pretrained=False, **kwargs):
+    """Constructs a ResNet-101-D model with blur anti-aliasing
+    """
+    model_args = dict(
+        block=Bottleneck, layers=[3, 4, 23, 3], aa_layer=BlurPool2d,
+        stem_width=32, stem_type='deep', avg_down=True, **kwargs)
+    return _create_resnet('resnetblur101d', pretrained, **model_args)
+
+
+@register_model
+def resnetaa50d(pretrained=False, **kwargs):
+    """Constructs a ResNet-50-D model with avgpool anti-aliasing
+    """
+    model_args = dict(
+        block=Bottleneck, layers=[3, 4, 6, 3], aa_layer=nn.AvgPool2d,
+        stem_width=32, stem_type='deep', avg_down=True, **kwargs)
+    return _create_resnet('resnetaa50d', pretrained, **model_args)
+
+
+@register_model
+def resnetaa101d(pretrained=False, **kwargs):
+    """Constructs a ResNet-101-D model with avgpool anti-aliasing
+    """
+    model_args = dict(
+        block=Bottleneck, layers=[3, 4, 23, 3], aa_layer=nn.AvgPool2d,
+        stem_width=32, stem_type='deep', avg_down=True, **kwargs)
+    return _create_resnet('resnetaa101d', pretrained, **model_args)
+
+
+@register_model
+def seresnetaa50d(pretrained=False, **kwargs):
+    """Constructs a SE=ResNet-50-D model with avgpool anti-aliasing
+    """
+    model_args = dict(
+        block=Bottleneck, layers=[3, 4, 6, 3], aa_layer=nn.AvgPool2d,
+        stem_width=32, stem_type='deep', avg_down=True, block_args=dict(attn_layer='se'), **kwargs)
+    return _create_resnet('seresnetaa50d', pretrained, **model_args)
 
 
 @register_model

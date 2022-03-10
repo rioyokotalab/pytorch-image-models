@@ -19,10 +19,68 @@ In addition to the sponsors at the link above, I've received hardware and/or clo
 * Nvidia (https://www.nvidia.com/en-us/)
 * TFRC (https://www.tensorflow.org/tfrc)
 
-I'm fortunate to be able to dedicate significant time and money of my own supporting this and other open source projects. However, as the projects increase in scope, outside support is needed to continue with the current trajectory of hardware, infrastructure, and electricty costs.
+I'm fortunate to be able to dedicate significant time and money of my own supporting this and other open source projects. However, as the projects increase in scope, outside support is needed to continue with the current trajectory of cloud services, hardware, and electricity costs.
 
 ## What's New
 
+### Feb 2, 2022
+* [Chris Hughes](https://github.com/Chris-hughes10) posted an exhaustive run through of `timm` on his blog yesterday. Well worth a read. [Getting Started with PyTorch Image Models (timm): A Practitioner’s Guide](https://towardsdatascience.com/getting-started-with-pytorch-image-models-timm-a-practitioners-guide-4e77b4bf9055)
+* I'm currently prepping to merge the `norm_norm_norm` branch back to master (ver 0.6.x) in next week or so.
+  * The changes are more extensive than usual and may destabilize and break some model API use (aiming for full backwards compat). So, beware `pip install git+https://github.com/rwightman/pytorch-image-models` installs!
+  * `0.5.x` releases and a `0.5.x` branch will remain stable with a cherry pick or two until dust clears. Recommend sticking to pypi install for a bit if you want stable.
+
+### Jan 14, 2022
+* Version 0.5.4 w/ release to be pushed to pypi. It's been a while since last pypi update and riskier changes will be merged to main branch soon....
+* Add ConvNeXT models /w weights from official impl (https://github.com/facebookresearch/ConvNeXt), a few perf tweaks, compatible with timm features
+* Tried training a few small (~1.8-3M param) / mobile optimized models, a few are good so far, more on the way...
+  * `mnasnet_small` - 65.6 top-1
+  * `mobilenetv2_050` - 65.9
+  * `lcnet_100/075/050` - 72.1 / 68.8 / 63.1
+  * `semnasnet_075` - 73
+  * `fbnetv3_b/d/g` - 79.1 / 79.7 / 82.0
+* TinyNet models added by [rsomani95](https://github.com/rsomani95)
+* LCNet added via MobileNetV3 architecture
+
+### Nov 22, 2021
+* A number of updated weights anew new model defs
+  * `eca_halonext26ts` - 79.5 @ 256
+  * `resnet50_gn` (new) - 80.1 @ 224, 81.3 @ 288
+  * `resnet50` - 80.7 @ 224, 80.9 @ 288 (trained at 176, not replacing current a1 weights as default since these don't scale as well to higher res, [weights](https://github.com/rwightman/pytorch-image-models/releases/download/v0.1-rsb-weights/resnet50_a1h2_176-001a1197.pth))
+  * `resnext50_32x4d` - 81.1 @ 224, 82.0 @ 288
+  * `sebotnet33ts_256` (new) - 81.2 @ 224
+  * `lamhalobotnet50ts_256` - 81.5 @ 256
+  * `halonet50ts` - 81.7 @ 256
+  * `halo2botnet50ts_256` - 82.0 @ 256
+  * `resnet101` - 82.0 @ 224, 82.8 @ 288
+  * `resnetv2_101` (new) - 82.1 @ 224, 83.0 @ 288
+  * `resnet152` - 82.8 @ 224, 83.5 @ 288
+  * `regnetz_d8` (new) - 83.5 @ 256, 84.0 @ 320
+  * `regnetz_e8` (new) - 84.5 @ 256, 85.0 @ 320
+* `vit_base_patch8_224` (85.8 top-1) & `in21k` variant weights added thanks [Martins Bruveris](https://github.com/martinsbruveris)
+* Groundwork in for FX feature extraction thanks to [Alexander Soare](https://github.com/alexander-soare)
+  * models updated for tracing compatibility (almost full support with some distlled transformer exceptions)
+
+### Oct 19, 2021
+* ResNet strikes back (https://arxiv.org/abs/2110.00476) weights added, plus any extra training components used. Model weights and some more details here (https://github.com/rwightman/pytorch-image-models/releases/tag/v0.1-rsb-weights)
+* BCE loss and Repeated Augmentation support for RSB paper
+* 4 series of ResNet based attention model experiments being added (implemented across byobnet.py/byoanet.py). These include all sorts of attention, from channel attn like SE, ECA to 2D QKV self-attention layers such as Halo, Bottlneck, Lambda. Details here (https://github.com/rwightman/pytorch-image-models/releases/tag/v0.1-attn-weights)
+* Working implementations of the following 2D self-attention modules (likely to be differences from paper or eventual official impl):
+  * Halo (https://arxiv.org/abs/2103.12731)
+  * Bottleneck Transformer (https://arxiv.org/abs/2101.11605)
+  * LambdaNetworks (https://arxiv.org/abs/2102.08602)
+* A RegNetZ series of models with some attention experiments (being added to). These do not follow the paper (https://arxiv.org/abs/2103.06877) in any way other than block architecture, details of official models are not available. See more here (https://github.com/rwightman/pytorch-image-models/releases/tag/v0.1-attn-weights)
+* ConvMixer (https://openreview.net/forum?id=TVHS5Y4dNvM), CrossVit (https://arxiv.org/abs/2103.14899), and BeiT (https://arxiv.org/abs/2106.08254) architectures + weights added
+* freeze/unfreeze helpers by [Alexander Soare](https://github.com/alexander-soare)
+
+### Aug 18, 2021
+* Optimizer bonanza!
+  * Add LAMB and LARS optimizers, incl trust ratio clipping options. Tweaked to work properly in PyTorch XLA (tested on TPUs w/ `timm bits` [branch](https://github.com/rwightman/pytorch-image-models/tree/bits_and_tpu/timm/bits))
+  * Add MADGRAD from FB research w/ a few tweaks (decoupled decay option, step handling that works with PyTorch XLA)
+  * Some cleanup on all optimizers and factory. No more `.data`, a bit more consistency, unit tests for all!
+  * SGDP and AdamP still won't work with PyTorch XLA but others should (have yet to test Adabelief, Adafactor, Adahessian myself).
+* EfficientNet-V2 XL TF ported weights added, but they don't validate well in PyTorch (L is better). The pre-processing for the V2 TF training is a bit diff and the fine-tuned 21k -> 1k weights are very sensitive and less robust than the 1k weights.
+* Added PyTorch trained EfficientNet-V2 'Tiny' w/ GlobalContext attn weights. Only .1-.2 top-1 better than the SE so more of a curiosity for those interested.
+  
 ### July 12, 2021
 * Add XCiT models from [official facebook impl](https://github.com/facebookresearch/xcit). Contributed by [Alexander Soare](https://github.com/alexander-soare)
 
@@ -215,10 +273,12 @@ All model architecture families include variants with pretrained weights. There 
 A full version of the list below with source links can be found in the [documentation](https://rwightman.github.io/pytorch-image-models/models/).
 
 * Aggregating Nested Transformers - https://arxiv.org/abs/2105.12723
+* BEiT - https://arxiv.org/abs/2106.08254
 * Big Transfer ResNetV2 (BiT) - https://arxiv.org/abs/1912.11370
 * Bottleneck Transformers - https://arxiv.org/abs/2101.11605
 * CaiT (Class-Attention in Image Transformers) - https://arxiv.org/abs/2103.17239
 * CoaT (Co-Scale Conv-Attentional Image Transformers) - https://arxiv.org/abs/2104.06399
+* ConvNeXt - https://arxiv.org/abs/2201.03545
 * ConViT (Soft Convolutional Inductive Biases Vision Transformers)- https://arxiv.org/abs/2103.10697
 * CspNet (Cross-Stage Partial Networks) - https://arxiv.org/abs/1911.11929
 * DeiT (Vision Transformer) - https://arxiv.org/abs/2012.12877
@@ -236,11 +296,11 @@ A full version of the list below with source links can be found in the [document
     * MNASNet B1, A1 (Squeeze-Excite), and Small - https://arxiv.org/abs/1807.11626
     * MobileNet-V2 - https://arxiv.org/abs/1801.04381
     * Single-Path NAS - https://arxiv.org/abs/1904.02877
+    * TinyNet - https://arxiv.org/abs/2010.14819
 * GhostNet - https://arxiv.org/abs/1911.11907
 * gMLP - https://arxiv.org/abs/2105.08050
 * GPU-Efficient Networks - https://arxiv.org/abs/2006.14090
 * Halo Nets - https://arxiv.org/abs/2103.12731
-* HardCoRe-NAS - https://arxiv.org/abs/2102.11646
 * HRNet - https://arxiv.org/abs/1908.07919
 * Inception-V3 - https://arxiv.org/abs/1512.00567
 * Inception-ResNet-V2 and Inception-V4 - https://arxiv.org/abs/1602.07261
@@ -248,7 +308,11 @@ A full version of the list below with source links can be found in the [document
 * LeViT (Vision Transformer in ConvNet's Clothing) - https://arxiv.org/abs/2104.01136
 * MLP-Mixer - https://arxiv.org/abs/2105.01601
 * MobileNet-V3 (MBConvNet w/ Efficient Head) - https://arxiv.org/abs/1905.02244
+  * FBNet-V3 - https://arxiv.org/abs/2006.02049
+  * HardCoRe-NAS - https://arxiv.org/abs/2102.11646
+  * LCNet - https://arxiv.org/abs/2109.15099
 * NASNet-A - https://arxiv.org/abs/1707.07012
+* NesT - https://arxiv.org/abs/2105.12723
 * NFNet-F - https://arxiv.org/abs/2102.06171
 * NF-RegNet / NF-ResNet - https://arxiv.org/abs/2101.08692
 * PNasNet - https://arxiv.org/abs/1712.00559
@@ -274,6 +338,7 @@ A full version of the list below with source links can be found in the [document
 * Transformer-iN-Transformer (TNT) - https://arxiv.org/abs/2103.00112
 * TResNet - https://arxiv.org/abs/2003.13630
 * Twins (Spatial Attention in Vision Transformers) - https://arxiv.org/pdf/2104.13840.pdf
+* Visformer - https://arxiv.org/abs/2104.12533
 * Vision Transformer - https://arxiv.org/abs/2010.11929
 * VovNet V2 and V1 - https://arxiv.org/abs/1911.06667
 * Xception - https://arxiv.org/abs/1610.02357
@@ -350,6 +415,8 @@ Model validation results can be found in the [documentation](https://rwightman.g
 ## Getting Started (Documentation)
 
 My current [documentation](https://rwightman.github.io/pytorch-image-models/) for `timm` covers the basics.
+
+[Getting Started with PyTorch Image Models (timm): A Practitioner’s Guide](https://towardsdatascience.com/getting-started-with-pytorch-image-models-timm-a-practitioners-guide-4e77b4bf9055) by [Chris Hughes](https://github.com/Chris-hughes10) is an extensive blog post covering many aspects of `timm` in detail.
 
 [timmdocs](https://fastai.github.io/timmdocs/) is quickly becoming a much more comprehensive set of documentation for `timm`. A big thanks to [Aman Arora](https://github.com/amaarora) for his efforts creating timmdocs.
 
