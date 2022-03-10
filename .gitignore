@@ -1,3 +1,10 @@
+# Customize
+cifar10_data/
+output/
+wandb/
+make_shard.py
+read_data.py
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
