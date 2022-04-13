@@ -33,7 +33,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, IMAGENET_INCEPTION_MEAN, IMAGENET_INCEPTION_STD
-from .helpers import build_model_with_cfg, named_apply, adapt_input_conv
 from .layers import PatchEmbed, Mlp, DropPath, trunc_normal_, lecun_normal_
 from .registry import register_model
 
@@ -325,6 +324,7 @@ class VisionTransformer(nn.Module):
         self.init_weights(weight_init)
 
     def init_weights(self, mode=''):
+        from .helpers import named_apply
         assert mode in ('jax', 'jax_nlhb', 'nlhb', '')
         head_bias = -math.log(self.num_classes) if 'nlhb' in mode else 0.
         trunc_normal_(self.pos_embed, std=.02)
@@ -430,6 +430,7 @@ def _load_weights(model: VisionTransformer, checkpoint_path: str, prefix: str = 
     """ Load weights from .npz checkpoints for official Google Brain Flax implementation
     """
     import numpy as np
+    from .helpers import adapt_input_conv
 
     def _n2p(w, t=True):
         if w.ndim == 4 and w.shape[0] == w.shape[1] == w.shape[2] == 1:
@@ -547,6 +548,7 @@ def checkpoint_filter_fn(state_dict, model):
 
 
 def _create_vision_transformer(variant, pretrained=False, default_cfg=None, **kwargs):
+    from .helpers import build_model_with_cfg
     default_cfg = default_cfg or default_cfgs[variant]
     if kwargs.get('features_only', None):
         raise RuntimeError('features_only not implemented for Vision Transformer models.')

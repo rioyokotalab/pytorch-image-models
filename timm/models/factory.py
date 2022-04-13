@@ -75,7 +75,7 @@ def create_model(
         model = create_fn(pretrained=pretrained, **kwargs)
 
     if pretrained_path:
-        load_original_pretrained_model(model, pretrained_path, kwargs['num_classes'])
+        load_original_pretrained_model(model, pretrained_path, kwargs['num_classes'], kwargs['img_size'])
 
     if checkpoint_path:
         load_checkpoint(model, checkpoint_path)

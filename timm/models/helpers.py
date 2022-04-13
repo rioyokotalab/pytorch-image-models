@@ -8,6 +8,7 @@ import math
 from collections import OrderedDict
 from copy import deepcopy
 from typing import Any, Callable, Optional, Tuple
+from timm.models.vision_transformer import checkpoint_filter_fn
 
 import torch
 import torch.nn as nn
@@ -206,12 +207,12 @@ def adapt_input_conv(in_chans, conv_weight):
     return conv_weight
 
 
-def load_original_pretrained_model(model, pretrained_path, num_classes, use_ema=False, strict=True):
+def load_original_pretrained_model(model, pretrained_path, num_classes, resolution, use_ema=False, strict=True):
     state_dict = load_state_dict(pretrained_path, use_ema)
-    load_original_pretrained(model, state_dict, num_classes=num_classes, strict=strict)
+    load_original_pretrained(model, state_dict, num_classes=num_classes, resolution=resolution, strict=strict)
 
 
-def load_original_pretrained(model, state_dict, num_classes=1000, strict=True, default_cfg=None, in_chans=3, filter_fn=None, progress=False):
+def load_original_pretrained(model, state_dict, num_classes=1000, resolution=224, strict=True, default_cfg=None):
     default_cfg = default_cfg or getattr(model, 'default_cfg', None) or {}
 
     classifiers = default_cfg.get('classifier', None)
@@ -220,7 +221,7 @@ def load_original_pretrained(model, state_dict, num_classes=1000, strict=True, d
         if isinstance(classifiers, str):
             classifiers = (classifiers,)
         # if num_classes != default_cfg['num_classes']:
-        if num_classes != 1:
+        if num_classes != -1:
             for classifier_name in classifiers:
                 # completely discard fully connected if model num_classes doesn't match pretrained weights
                 del state_dict[classifier_name + '.weight']
@@ -233,6 +234,10 @@ def load_original_pretrained(model, state_dict, num_classes=1000, strict=True, d
                 state_dict[classifier_name + '.weight'] = classifier_weight[label_offset:]
                 classifier_bias = state_dict[classifier_name + '.bias']
                 state_dict[classifier_name + '.bias'] = classifier_bias[label_offset:]
+        
+        if resolution != default_cfg['input_size'][1]:
+            state_dict = checkpoint_filter_fn(state_dict, model)
+            strict = False
 
     model.load_state_dict(state_dict, strict=strict)
 

@@ -395,6 +395,7 @@ def main():
         args.model,
         pretrained=args.pretrained,
         num_classes=args.num_classes,
+        img_size=args.input_size[1],
         drop_rate=args.drop,
         drop_connect_rate=args.drop_connect,  # DEPRECATED, use drop_path
         drop_path_rate=args.drop_path,
