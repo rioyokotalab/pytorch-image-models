@@ -115,7 +115,7 @@ parser.add_argument('-b', '--batch-size', type=int, default=128, metavar='N',
                     help='input batch size for training (default: 128)')
 parser.add_argument('-vb', '--validation-batch-size', type=int, default=None, metavar='N',
                     help='validation batch size override (default: None)')
-parser.add_argument('--gradient_ckp', default=None, type=int,
+parser.add_argument('--gradient-ckp', default=None, type=int,
                     help='chunk number for gradient checkpointing (set to 0 for block number)')
 
 # Optimizer parameters
