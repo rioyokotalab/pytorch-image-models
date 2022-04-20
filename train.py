@@ -115,6 +115,8 @@ parser.add_argument('-b', '--batch-size', type=int, default=128, metavar='N',
                     help='input batch size for training (default: 128)')
 parser.add_argument('-vb', '--validation-batch-size', type=int, default=None, metavar='N',
                     help='validation batch size override (default: None)')
+parser.add_argument('--gradient_ckp', default=None, type=int,
+                    help='chunk number for gradient checkpointing (set to 0 for block number)')
 
 # Optimizer parameters
 parser.add_argument('--opt', default='sgd', type=str, metavar='OPTIMIZER',
@@ -405,7 +407,8 @@ def main():
         bn_eps=args.bn_eps,
         scriptable=args.torchscript,
         checkpoint_path=args.initial_checkpoint,
-        pretrained_path=args.pretrained_path)
+        pretrained_path=args.pretrained_path,
+        gradient_ckp=args.gradient_ckp)
     if args.num_classes is None:
         assert hasattr(model, 'num_classes'), 'Model must have `num_classes` attr if not set on cmd line/config.'
         args.num_classes = model.num_classes  # FIXME handle model default vs config num_classes more elegantly
@@ -497,7 +500,7 @@ def main():
         else:
             if args.rank == 0:
                 _logger.info("Using native Torch DistributedDataParallel.")
-            model = NativeDDP(model, device_ids=[args.local_rank], broadcast_buffers=not args.no_ddp_bb)
+            model = NativeDDP(model, device_ids=[args.local_rank], broadcast_buffers=not args.no_ddp_bb, find_unused_parameters=False)
         # NOTE: EMA model does not need to be wrapped by DDP
 
     # if needed, load dataset from torch
@@ -718,6 +721,9 @@ def train_one_epoch(
     last_idx = len(loader) - 1
     num_updates = epoch * len(loader)
     for batch_idx, (input, target) in enumerate(loader):
+        if args.rank == 0 and batch_idx == 3 and epoch == 0:
+            memory_cost = torch.cuda.memory_allocated(args.rank)
+            print(f'Memory cost before initialize: {memory_cost} ({memory_cost/1024/1024/1024:.01f}GB)')
         last_batch = batch_idx == last_idx
         data_time_m.update(time.time() - end)
         if not args.prefetcher:
@@ -730,6 +736,9 @@ def train_one_epoch(
         with amp_autocast():
             output = model(input)
             loss = loss_fn(output, target)
+        if args.rank == 0 and batch_idx == 3 and epoch == 0:
+            memory_cost = torch.cuda.memory_allocated(args.rank)
+            print(f'Memory cost after forward: {memory_cost} ({memory_cost/1024/1024/1024:.01f}GB)')
 
         if not args.distributed:
             losses_m.update(loss.item(), input.size(0))

@@ -260,7 +260,7 @@ class VisionTransformer(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dim=768, depth=12,
                  num_heads=12, mlp_ratio=4., qkv_bias=True, representation_size=None, distilled=False,
                  drop_rate=0., attn_drop_rate=0., drop_path_rate=0., embed_layer=PatchEmbed, norm_layer=None,
-                 act_layer=None, weight_init=''):
+                 act_layer=None, weight_init='', gradient_ckp=None):
         """
         Args:
             img_size (int, tuple): input image size
@@ -280,6 +280,7 @@ class VisionTransformer(nn.Module):
             embed_layer (nn.Module): patch embedding layer
             norm_layer: (nn.Module): normalization layer
             weight_init: (str): weight init scheme
+            gradient_ckp: (int): chunk number for gradient checkpointing
         """
         super().__init__()
         self.num_classes = num_classes
@@ -287,6 +288,7 @@ class VisionTransformer(nn.Module):
         self.num_tokens = 2 if distilled else 1
         norm_layer = norm_layer or partial(nn.LayerNorm, eps=1e-6)
         act_layer = act_layer or nn.GELU
+        self.gradient_ckp = gradient_ckp
 
         self.patch_embed = embed_layer(
             img_size=img_size, patch_size=patch_size, in_chans=in_chans, embed_dim=embed_dim)
@@ -369,7 +371,16 @@ class VisionTransformer(nn.Module):
         else:
             x = torch.cat((cls_token, self.dist_token.expand(x.shape[0], -1, -1), x), dim=1)
         x = self.pos_drop(x + self.pos_embed)
-        x = self.blocks(x)
+        if self.gradient_ckp is not None:
+            # do gradient checkpoint
+            if self.gradient_ckp >= 1:
+                # print(f'do gradient checkpointing with chunk number {self.gradient_ckp}')
+                x = torch.utils.checkpoint.checkpoint_sequential(self.blocks, self.gradient_ckp, x)
+            else:
+                # print(f'do gradient checkpointing with chunk number {len(self.blocks)}')
+                x = torch.utils.checkpoint.checkpoint_sequential(self.blocks, len(self.blocks), x)
+        else:
+            x = self.blocks(x)
         x = self.norm(x)
         if self.dist_token is None:
             return self.pre_logits(x[:, 0])
