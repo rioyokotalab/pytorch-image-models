@@ -42,7 +42,7 @@ import webdataset as wds
 from timm.data.loader import create_transform_webdataset
 import torch.distributed as dist
 from torchvision import datasets, transforms
-from timm.data.transforms import _pil_interp
+# from timm.data.transforms import _pil_interp
 import re
 
 
@@ -407,7 +407,6 @@ def main():
         drop_path_rate=args.drop_path,
         drop_block_rate=args.drop_block,
         global_pool=args.gp,
-        bn_tf=args.bn_tf,
         bn_momentum=args.bn_momentum,
         bn_eps=args.bn_eps,
         scriptable=args.torchscript,
