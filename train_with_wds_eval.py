@@ -41,8 +41,6 @@ from timm.utils import ApexScaler, NativeScaler
 import webdataset as wds
 from timm.data.loader import create_transform_webdataset
 import torch.distributed as dist
-from torchvision import datasets, transforms
-from timm.data.transforms import _pil_interp
 import re
 
 
@@ -128,6 +126,8 @@ parser.add_argument('-b', '--batch-size', type=int, default=32, metavar='N',
                     help='input batch size for training (default: 32)')
 parser.add_argument('-vb', '--validation-batch-size-multiplier', type=int, default=1, metavar='N',
                     help='ratio of validation batch size to training batch size (default: 1)')
+parser.add_argument('--gradient-ckp', default=None, type=int,
+                    help='chunk number for gradient checkpointing (set to 0 for block number)')
 
 # Web Datasets
 parser.add_argument('--trainshards', default=None,
@@ -394,7 +394,7 @@ def main():
 
     if args.log_wandb and args.rank == 0:
         if has_wandb:
-            wandb.init(project=args.project_name, entity='yokota-vit', name=args.experiment, group='valid', config=args)
+            wandb.init(project=args.project_name, entity='yokota-vit', name=args.experiment, group='finetune', config=args)
         else:
             _logger.warning("You've requested to log metrics to wandb but package not found. "
                             "Metrics not being logged to wandb, try `pip install wandb`")
@@ -403,17 +403,18 @@ def main():
         args.model,
         pretrained=args.pretrained,
         num_classes=args.num_classes,
+        img_size=args.input_size[1],
         drop_rate=args.drop,
         drop_connect_rate=args.drop_connect,  # DEPRECATED, use drop_path
         drop_path_rate=args.drop_path,
         drop_block_rate=args.drop_block,
         global_pool=args.gp,
-        bn_tf=args.bn_tf,
         bn_momentum=args.bn_momentum,
         bn_eps=args.bn_eps,
         scriptable=args.torchscript,
         checkpoint_path=args.initial_checkpoint,
-        pretrained_path=args.pretrained_path)
+        pretrained_path=args.pretrained_path,
+        gradient_ckp=args.gradient_ckp)
     if args.num_classes is None:
         assert hasattr(model, 'num_classes'), 'Model must have `num_classes` attr if not set on cmd line/config.'
         args.num_classes = model.num_classes  # FIXME handle model default vs config num_classes more elegantly
@@ -911,17 +912,20 @@ def train_one_epoch(
         if epoch == start_epoch and batch_idx <= start_iter:
             num_updates += 1
             continue
+        if args.rank == 0 and batch_idx == 3 and epoch == 0:
+            memory_cost = torch.cuda.memory_allocated(args.rank)
+            print(f'Memory cost before initialize: {memory_cost} ({memory_cost/1024/1024/1024:.01f}GB)')
         last_batch = batch_idx == last_idx
         data_time_m.update(time.time() - end)
 
-        if args.trainshards is None:
-            for t in range(len(target)):
-                a = torch.Tensor([int(target[t]["category_id"])])
-                if t == 0:
-                    b = a
-                else:
-                    b = torch.cat((b, a), dim=0)
-            target = b
+        # if args.trainshards is None:
+        #     for t in range(len(target)):
+        #         a = torch.Tensor([int(target[t]["category_id"])])
+        #         if t == 0:
+        #             b = a
+        #         else:
+        #             b = torch.cat((b, a), dim=0)
+        #     target = b
 
         if not args.prefetcher:
             input, target = input.cuda(), target.cuda()
@@ -933,6 +937,9 @@ def train_one_epoch(
         with amp_autocast():
             output = model(input)
             loss = loss_fn(output, target)
+        if args.rank == 0 and batch_idx == 3 and epoch == 0:
+            memory_cost = torch.cuda.memory_allocated(args.rank)
+            print(f'Memory cost after forward: {memory_cost} ({memory_cost/1024/1024/1024:.01f}GB)')
 
         if not args.distributed:
             losses_m.update(loss.item(), input.size(0))
