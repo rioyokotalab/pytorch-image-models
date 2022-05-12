@@ -480,15 +480,14 @@ def main():
 
     # optionally resume from a checkpoint
     resume_epoch = None
-    resume_iter = None
     if args.resume:
-        resume_epoch, resume_iter = resume_checkpoint_with_iter(
+        resume_epoch = resume_checkpoint(
             model, args.resume,
             optimizer=None if args.no_resume_opt else optimizer,
             loss_scaler=None if args.no_resume_opt else loss_scaler,
             log_info=args.rank == 0)
         if args.rank == 0:
-            _logger.info('resume epoch: {}, resume iter: {}'.format(resume_epoch, resume_iter))
+            _logger.info('resume epoch: {}'.format(resume_epoch))
 
 
     # setup exponential moving average of model weights, SWA could be used here too
@@ -761,8 +760,6 @@ def main():
         start_epoch = args.start_epoch
     elif resume_epoch is not None:
         start_epoch = resume_epoch
-        if resume_iter is not None:
-            start_iter = resume_iter
     if lr_scheduler is not None and (start_epoch > 0 or start_iter > 0):
         if args.sched == 'cosine_iter':
             lr_scheduler.step_update(start_epoch * len(loader_train) + start_iter)
