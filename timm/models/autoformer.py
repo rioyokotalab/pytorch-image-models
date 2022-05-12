@@ -563,7 +563,7 @@ class Vision_TransformerSuper(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3, num_classes=1000, embed_dim=768, depth=12,
                  num_heads=12, mlp_ratio=4., qkv_bias=True, qk_scale=None, drop_rate=0., attn_drop_rate=0.,
                  drop_path_rate=0., pre_norm=True, scale=False, gp=True, relative_position=True, change_qkv=True, abs_pos = True, max_relative_position=14,
-                 representation_size=None, distilled=None, embed_layer=None, norm_layer=None, act_layer=None, weight_init=None):
+                 representation_size=None, distilled=None, embed_layer=None, norm_layer=None, act_layer=None, weight_init=None, gradient_ckp=None):
         super(Vision_TransformerSuper, self).__init__()
         # the configs of super arch
         self.super_embed_dim = embed_dim
@@ -579,6 +579,7 @@ class Vision_TransformerSuper(nn.Module):
         self.patch_embed_super = PatchembedSuper(img_size=img_size, patch_size=patch_size,
                                                  in_chans=in_chans, embed_dim=embed_dim)
         self.gp = gp
+        self.gradient_ckp = gradient_ckp
 
         # configs for the sampled subTransformer
         self.sample_embed_dim = [self.super_embed_dim]
@@ -696,8 +697,21 @@ class Vision_TransformerSuper(nn.Module):
         x = F.dropout(x, p=self.sample_dropout, training=self.training)
 
         # start_time = time.time()
-        for blk in self.blocks:
-            x = blk(x)
+        # print(self.sample_layer_num)
+        if self.gradient_ckp is not None:
+            if self.gradient_ckp >= 1:
+                ckp_interval = self.sample_layer_num[0] // self.gradient_ckp
+                ckp_blocks = list(range(0, self.sample_layer_num[0], ckp_interval))
+            else:
+                ckp_blocks = list(range(self.sample_layer_num[0]))
+        else:
+            ckp_blocks = []
+        # print(ckp_blocks)
+        for idx, blk in enumerate(self.blocks):
+            if idx in ckp_blocks:
+                x = torch.utils.checkpoint.checkpoint(blk, x)
+            else:
+                x = blk(x)
         # print(time.time()-start_time)
         if self.pre_norm:
             x = self.norm(x)
