@@ -548,6 +548,7 @@ def main():
     start_iter = -1
     update_iter = None
     warmup_update_iter = None
+    warmup_t = None
     if args.start_epoch is not None:
         # a specified start_epoch will always override the resume epoch
         start_epoch = args.start_epoch
