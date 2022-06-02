@@ -45,6 +45,9 @@ from torchvision import datasets, transforms
 # from timm.data.transforms import _pil_interp
 import re
 
+import warnings
+warnings.filterwarnings('ignore')
+
 
 def print0(message):
     if dist.is_initialized():
@@ -315,6 +318,8 @@ parser.add_argument('--pause', type=int, default=None,
                     help='pause training at the epoch')
 parser.add_argument('--hold-epochs', nargs='+', type=int,
                     help='epochs of which checkpoint will never be deleted')
+parser.add_argument('--hold-epochs-interval', type=int, default=None,
+                    help='interval of epochs of which checkpoint will never be deleted')
 parser.add_argument('--cooldown', action='store_true',
                     help='doing cooldown epochs')
 
@@ -839,7 +844,7 @@ def main():
                 # save proper checkpoint with eval metric
                 save_metric = train_metrics[eval_metric]
                 best_metric, best_epoch = saver.save_checkpoint(epoch, metric=save_metric)
-                if args.hold_epochs is not None and epoch in args.hold_epochs:
+                if (args.hold_epochs is not None and epoch in args.hold_epochs) or (args.hold_epochs_interval is not None and (epoch+1) % args.hold_epochs_interval == 0):
                     if args.output:
                         checkpoint_file = f'{args.output}/{args.experiment}/checkpoint-{epoch}.pth.tar'
                         target_file = f'{args.output}/{args.experiment}/held-checkpoint-{epoch}.pth.tar'
@@ -882,7 +887,7 @@ def train_one_epoch(
     last_idx = len(loader) - 1
     num_updates = epoch * len(loader)
     for batch_idx, (input, target) in enumerate(loader):
-        if args.rank == 0 and batch_idx == 3 and epoch == 0:
+        if args.rank == 0 and batch_idx == 3 and epoch == start_epoch:
             memory_cost = torch.cuda.memory_allocated(args.rank)
             print(f'Memory cost before initialize: {memory_cost} ({memory_cost/1024/1024/1024:.01f}GB)')
         if epoch == start_epoch and batch_idx <= start_iter:
@@ -910,7 +915,7 @@ def train_one_epoch(
         with amp_autocast():
             output = model(input)
             loss = loss_fn(output, target)
-        if args.rank == 0 and batch_idx == 3 and epoch == 0:
+        if args.rank == 0 and batch_idx == 3 and epoch == start_epoch:
             memory_cost = torch.cuda.memory_allocated(args.rank)
             print(f'Memory cost after forward: {memory_cost} ({memory_cost/1024/1024/1024:.01f}GB)')
 

@@ -292,6 +292,8 @@ parser.add_argument('--pause', type=int, default=None,
                     help='pause training at the epoch')
 parser.add_argument('--hold-epochs', type=int, default=None,
                     help='epochs of which checkpoint will never be deleted')
+parser.add_argument('--hold-epochs-interval', type=int, default=None,
+                    help='interval of epochs of which checkpoint will never be deleted')
 parser.add_argument('--cooldown', action='store_true',
                     help='doing cooldown epochs')
 
@@ -632,16 +634,12 @@ def main():
                 # save proper checkpoint with eval metric
                 save_metric = train_metrics[eval_metric]
                 best_metric, best_epoch = saver.save_checkpoint(epoch, metric=save_metric)
-                if args.hold_epochs is not None and epoch % args.hold_epochs == 0:
+                if (args.hold_epochs is not None and epoch in args.hold_epochs) or (args.hold_epochs_interval is not None and (epoch+1) % args.hold_epochs_interval == 0):
                     if args.output:
                         checkpoint_file = f'{args.output}/{args.experiment}/checkpoint-{epoch}.pth.tar'
-                        if not os.path.exists(checkpoint_file):
-                            checkpoint_file = f'{args.output}/{args.experiment}/last.pth.tar'
                         target_file = f'{args.output}/{args.experiment}/held-checkpoint-{epoch}.pth.tar'
                     else:
                         checkpoint_file = f'output/train/{args.experiment}/checkpoint-{epoch}.pth.tar'
-                        if not os.path.exists(checkpoint_file):
-                            checkpoint_file = f'output/train/{args.experiment}/last.pth.tar'
                         target_file = f'output/train/{args.experiment}/held-checkpoint-{epoch}.pth.tar'
                     shutil.copyfile(checkpoint_file, target_file)
 

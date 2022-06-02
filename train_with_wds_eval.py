@@ -588,7 +588,7 @@ def main():
                 # wds.WebDataset(args.trainshards, shardshuffle=True)
                     .shuffle(200000)
                     .decode("pil")
-                    .rename(image="jpg;jpeg", target="cls")
+                    .rename(image="jpg;jpeg;png", target="cls")
                     .map_dict(image=transform_train)
                     .to_tuple("image", "target")
             )

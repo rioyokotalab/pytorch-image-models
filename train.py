@@ -19,6 +19,7 @@ import time
 import yaml
 import os
 import logging
+import shutil
 from collections import OrderedDict
 from contextlib import suppress
 from datetime import datetime
@@ -308,6 +309,12 @@ parser.add_argument('--wandb-group', default='finetune', type=str,
                     help='set wandb group name')
 parser.add_argument('--pause', type=int, default=None,
                     help='pause training at the epoch')
+parser.add_argument('--hold-epochs', nargs='+', type=int,
+                    help='epochs of which checkpoint will never be deleted')
+parser.add_argument('--hold-epochs-interval', type=int, default=None,
+                    help='interval of epochs of which checkpoint will never be deleted')
+parser.add_argument('--cooldown', action='store_true',
+                    help='doing cooldown epochs')
 
 parser.add_argument('--pretrained-path', default='', type=str, metavar='PATH',
                     help='Load from original checkpoint and pretrain (default: none) (with --pretrained)')
@@ -603,6 +610,14 @@ def main():
             lr_scheduler.step_update(start_epoch * len(loader_train))
         else:
             lr_scheduler.step(start_epoch)
+    update_iter = None
+    if args.cooldown:
+        init_lr = optimizer.param_groups[0]['lr']
+        num_iters = args.cooldown_epochs * len(loader_train)
+        num_epochs = start_epoch + args.cooldown_epochs
+        update_iter = (init_lr - args.min_lr) / num_iters
+        if args.rank == 0:
+            _logger.info('lr scheduler steps: {}'.format(update_iter))
 
     if args.rank == 0:
         _logger.info('Scheduled iters: {}'.format(num_iters))
@@ -659,7 +674,8 @@ def main():
             train_metrics = train_one_epoch(
                 epoch, model, loader_train, optimizer, train_loss_fn, args,
                 lr_scheduler=lr_scheduler, saver=saver, output_dir=output_dir,
-                amp_autocast=amp_autocast, loss_scaler=loss_scaler, model_ema=model_ema, mixup_fn=mixup_fn)
+                amp_autocast=amp_autocast, loss_scaler=loss_scaler, model_ema=model_ema, mixup_fn=mixup_fn,
+                update_iter=update_iter)
 
             if args.distributed and args.dist_bn in ('broadcast', 'reduce'):
                 if args.rank == 0:
@@ -688,6 +704,14 @@ def main():
                 # save proper checkpoint with eval metric
                 save_metric = eval_metrics[eval_metric]
                 best_metric, best_epoch = saver.save_checkpoint(epoch, metric=save_metric)
+                if (args.hold_epochs is not None and epoch in args.hold_epochs) or (args.hold_epochs_interval is not None and (epoch+1) % args.hold_epochs_interval == 0):
+                    if args.output:
+                        checkpoint_file = f'{args.output}/{args.experiment}/checkpoint-{epoch}.pth.tar'
+                        target_file = f'{args.output}/{args.experiment}/held-checkpoint-{epoch}.pth.tar'
+                    else:
+                        checkpoint_file = f'output/train/{args.experiment}/checkpoint-{epoch}.pth.tar'
+                        target_file = f'output/train/{args.experiment}/held-checkpoint-{epoch}.pth.tar'
+                    shutil.copyfile(checkpoint_file, target_file)
 
             if args.pause is not None:
                 if epoch - start_epoch >= args.pause:
@@ -702,7 +726,7 @@ def main():
 def train_one_epoch(
         epoch, model, loader, optimizer, loss_fn, args,
         lr_scheduler=None, saver=None, output_dir=None, amp_autocast=suppress,
-        loss_scaler=None, model_ema=None, mixup_fn=None):
+        loss_scaler=None, model_ema=None, mixup_fn=None, update_iter=None):
 
     if args.mixup_off_epoch and epoch >= args.mixup_off_epoch:
         if args.prefetcher and loader.mixup_enabled:
@@ -804,7 +828,10 @@ def train_one_epoch(
                 last_batch or (batch_idx + 1) % args.recovery_interval == 0):
             saver.save_recovery(epoch, batch_idx=batch_idx)
 
-        if lr_scheduler is not None:
+        if args.cooldown:
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = param_group['lr'] - update_iter
+        elif lr_scheduler is not None:
             lr_scheduler.step_update(num_updates=num_updates, metric=losses_m.avg)
 
         end = time.time()
