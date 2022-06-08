@@ -39,6 +39,8 @@ default_cfgs = {
         url='', mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD),
     'autoformer_small_patch16_224': _cfg(
         url='', mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD),
+    'autoformer_base_patch16_224': _cfg(
+        url='', mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD),
     }
 
 
@@ -941,4 +943,10 @@ def autoformer_tiny_patch16_224(pretrained=False, **kwargs):
 def autoformer_small_patch16_224(pretrained=False, **kwargs):
     model_kwargs = dict(patch_size=16, embed_dim=448, depth=14, num_heads=7, mlp_ratio=4., **kwargs)
     model = _create_autoformer('autoformer_small_patch16_224', pretrained=pretrained, **model_kwargs)
+    return model
+
+@register_model
+def autoformer_base_patch16_224(pretrained=False, **kwargs):
+    model_kwargs = dict(patch_size=16, embed_dim=640, depth=16, num_heads=10, mlp_ratio=4., **kwargs)
+    model = _create_autoformer('autoformer_base_patch16_224', pretrained=pretrained, **model_kwargs)
     return model
