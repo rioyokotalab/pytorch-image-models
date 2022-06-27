@@ -6,7 +6,7 @@ A PyTorch implement of the Hybrid Vision Transformers as described in:
     - https://arxiv.org/abs/2010.11929
 
 `How to train your ViT? Data, Augmentation, and Regularization in Vision Transformers`
-    - https://arxiv.org/abs/2106.TODO
+    - https://arxiv.org/abs/2106.10270
 
 NOTE These hybrid model definitions depend on code in vision_transformer.py.
 They were moved here to keep file sizes sane.
@@ -143,8 +143,7 @@ class HybridEmbed(nn.Module):
 def _create_vision_transformer_hybrid(variant, backbone, pretrained=False, **kwargs):
     embed_layer = partial(HybridEmbed, backbone=backbone)
     kwargs.setdefault('patch_size', 1)  # default patch size for hybrid models if not set
-    return _create_vision_transformer(
-        variant, pretrained=pretrained, embed_layer=embed_layer, default_cfg=default_cfgs[variant], **kwargs)
+    return _create_vision_transformer(variant, pretrained=pretrained, embed_layer=embed_layer, **kwargs)
 
 
 def _resnetv2(layers=(3, 4, 9), **kwargs):
@@ -296,7 +295,7 @@ def vit_base_r50_s16_224_in21k(pretrained=False, **kwargs):
     ImageNet-21k weights @ 224x224, source https://github.com/google-research/vision_transformer.
     """
     backbone = _resnetv2(layers=(3, 4, 9), **kwargs)
-    model_kwargs = dict(embed_dim=768, depth=12, num_heads=12, representation_size=768, **kwargs)
+    model_kwargs = dict(embed_dim=768, depth=12, num_heads=12, **kwargs)
     model = _create_vision_transformer_hybrid(
         'vit_base_r50_s16_224_in21k', backbone=backbone, pretrained=pretrained, **model_kwargs)
     return model
