@@ -51,6 +51,12 @@ except ImportError as e:
     FlopCountAnalysis = None
     has_fvcore_profiling = False
 
+try:
+    from functorch.compile import memory_efficient_fusion
+    has_functorch = True
+except ImportError as e:
+    has_functorch = False
+
 
 torch.backends.cudnn.benchmark = True
 _logger = logging.getLogger('validate')
@@ -89,14 +95,19 @@ parser.add_argument('--gp', default=None, type=str, metavar='POOL',
                     help='Global pool type, one of (fast, avg, max, avgmax, avgmaxc). Model default if None.')
 parser.add_argument('--channels-last', action='store_true', default=False,
                     help='Use channels_last memory layout')
+parser.add_argument('--grad-checkpointing', action='store_true', default=False,
+                    help='Enable gradient checkpointing through model blocks/stages')
 parser.add_argument('--amp', action='store_true', default=False,
                     help='use PyTorch Native AMP for mixed precision training. Overrides --precision arg.')
 parser.add_argument('--precision', default='float32', type=str,
                     help='Numeric precision. One of (amp, float32, float16, bfloat16, tf32)')
-parser.add_argument('--torchscript', dest='torchscript', action='store_true',
-                    help='convert model torchscript for inference')
 parser.add_argument('--fuser', default='', type=str,
                     help="Select jit fuser. One of ('', 'te', 'old', 'nvfuser')")
+scripting_group = parser.add_mutually_exclusive_group()
+scripting_group.add_argument('--torchscript', dest='torchscript', action='store_true',
+                    help='convert model torchscript for inference')
+scripting_group.add_argument('--aot-autograd', default=False, action='store_true',
+                    help="Enable AOT Autograd support. (It's recommended to use this option with `--fuser nvfuser` together)")
 
 
 # train optimizer parameters
@@ -186,7 +197,7 @@ def profile_fvcore(model, input_size=(3, 224, 224), batch_size=1, detailed=False
 
 class BenchmarkRunner:
     def __init__(
-            self, model_name, detail=False, device='cuda', torchscript=False, precision='float32',
+            self, model_name, detail=False, device='cuda', torchscript=False, aot_autograd=False, precision='float32',
             fuser='', num_warm_iter=10, num_bench_iter=50, use_train_size=False, **kwargs):
         self.model_name = model_name
         self.detail = detail
@@ -202,7 +213,11 @@ class BenchmarkRunner:
             num_classes=kwargs.pop('num_classes', None),
             in_chans=3,
             global_pool=kwargs.pop('gp', 'fast'),
-            scriptable=torchscript)
+            scriptable=torchscript,
+            drop_rate=kwargs.pop('drop', 0.),
+            drop_path_rate=kwargs.pop('drop_path', None),
+            drop_block_rate=kwargs.pop('drop_block', None),
+        )
         self.model.to(
             device=self.device,
             dtype=self.model_dtype,
@@ -214,10 +229,13 @@ class BenchmarkRunner:
         if torchscript:
             self.model = torch.jit.script(self.model)
             self.scripted = True
-
         data_config = resolve_data_config(kwargs, model=self.model, use_test_size=not use_train_size)
         self.input_size = data_config['input_size']
         self.batch_size = kwargs.pop('batch_size', 256)
+
+        if aot_autograd:
+            assert has_functorch, "functorch is needed for --aot-autograd"
+            self.model = memory_efficient_fusion(self.model)
 
         self.example_inputs = None
         self.num_warm_iter = num_warm_iter
@@ -317,6 +335,9 @@ class TrainBenchmarkRunner(BenchmarkRunner):
             self.model,
             opt=kwargs.pop('opt', 'sgd'),
             lr=kwargs.pop('lr', 1e-4))
+
+        if kwargs.pop('grad_checkpointing', False):
+            self.model.set_grad_checkpointing()
 
     def _gen_target(self, batch_size):
         return torch.empty(
