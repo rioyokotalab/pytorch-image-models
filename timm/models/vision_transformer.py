@@ -31,7 +31,7 @@ import torch.nn.functional as F
 import torch.utils.checkpoint
 
 from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, IMAGENET_INCEPTION_MEAN, IMAGENET_INCEPTION_STD
-from .helpers import resolve_pretrained_cfg, checkpoint_seq
+# from .helpers import checkpoint_seq
 from .layers import PatchEmbed, Mlp, DropPath, trunc_normal_, lecun_normal_
 from .registry import register_model
 
@@ -645,7 +645,7 @@ def checkpoint_filter_fn(state_dict, model):
 
 
 def _create_vision_transformer(variant, pretrained=False, **kwargs):
-    from .helpers import build_model_with_cfg
+    from .helpers import build_model_with_cfg, resolve_pretrained_cfg
     if kwargs.get('features_only', None):
         raise RuntimeError('features_only not implemented for Vision Transformer models.')
 

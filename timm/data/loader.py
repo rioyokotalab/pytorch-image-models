@@ -197,6 +197,8 @@ def create_loader(
         repeated_aug=False,
         split_fake=False,
         worker_seeding='all',
+        src=False,
+        use_3aug=False,
 ):
     re_num_splits = 0
     if re_split:
@@ -223,6 +225,8 @@ def create_loader(
         re_count=re_count,
         re_num_splits=re_num_splits,
         separate=num_aug_splits > 0,
+        src=src,
+        use_3aug=use_3aug
     )
 
     sampler = None

@@ -266,6 +266,10 @@ group.add_argument('--drop-block', type=float, default=None, metavar='PCT',
                     help='Drop block rate (default: None)')
 group.add_argument('--repeated-aug', action='store_true',
                     help='Use repeated augmentation')
+parser.add_argument('--use-3aug', action='store_true',
+                    help='Use 3-Augment')
+parser.add_argument('--src', action='store_true',
+                    help='Use simple random crop')
 
 # Batch norm parameters (only works with gen_efficientnet based models currently)
 group = parser.add_argument_group('Batch norm parameters', 'Only works with gen_efficientnet based models currently.')
@@ -398,13 +402,6 @@ def main():
     else:
         _logger.info('Training with a single process on 1 GPUs.')
     assert args.rank >= 0
-
-    if args.rank == 0 and args.log_wandb:
-        if has_wandb:
-            wandb.init(project=args.experiment, config=args)
-        else:
-            _logger.warning("You've requested to log metrics to wandb but package not found. "
-                            "Metrics not being logged to wandb, try `pip install wandb`")
 
     # resolve AMP arguments based on PyTorch / Apex availability
     use_amp = None
@@ -618,7 +615,8 @@ def main():
         pin_memory=args.pin_mem,
         use_multi_epochs_loader=args.use_multi_epochs_loader,
         repeated_aug=args.repeated_aug,
-        worker_seeding=args.worker_seeding,
+        src=args.src,
+        use_3aug=args.use_3aug
     )
 
     loader_eval = create_loader(

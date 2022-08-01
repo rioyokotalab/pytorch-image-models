@@ -59,9 +59,10 @@ from .xception_aligned import *
 from .xcit import *
 from .twins import *
 from .autoformer import *
+from .deit3 import *
 
 from .factory import create_model, parse_model_name, safe_model_name
-from .helpers import load_checkpoint, resume_checkpoint, model_parameters, resume_checkpoint_with_iter
+from .helpers import load_checkpoint, resume_checkpoint, model_parameters, resume_checkpoint_with_iter, resolve_pretrained_cfg
 from .layers import TestTimePoolHead, apply_test_time_pool
 from .layers import convert_splitbn_model, convert_sync_batchnorm
 from .layers import is_scriptable, is_exportable, set_scriptable, set_exportable, is_no_jit, set_no_jit

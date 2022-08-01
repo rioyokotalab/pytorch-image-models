@@ -1,11 +1,12 @@
 import torch
+from torchvision import transforms
 import torchvision.transforms.functional as F
 try:
     from torchvision.transforms.functional import InterpolationMode
     has_interpolation_mode = True
 except ImportError:
     has_interpolation_mode = False
-from PIL import Image
+from PIL import Image, ImageFilter, ImageOps
 import warnings
 import math
 import random
@@ -195,3 +196,70 @@ class RandomResizedCropAndInterpolation:
         format_string += ', ratio={0}'.format(tuple(round(r, 4) for r in self.ratio))
         format_string += ', interpolation={0})'.format(interpolate_str)
         return format_string
+
+
+class GaussianBlur(object):
+    """
+    Apply Gaussian Blur to the PIL image.
+    """
+    def __init__(self, p=0.1, radius_min=0.1, radius_max=2.):
+        self.prob = p
+        self.radius_min = radius_min
+        self.radius_max = radius_max
+
+    def __call__(self, img):
+        do_it = random.random() <= self.prob
+        if not do_it:
+            return img
+
+        img = img.filter(
+            ImageFilter.GaussianBlur(
+                radius=random.uniform(self.radius_min, self.radius_max)
+            )
+        )
+        return img
+
+
+class Solarization(object):
+    """
+    Apply Solarization to the PIL image.
+    """
+    def __init__(self, p=0.2):
+        self.p = p
+
+    def __call__(self, img):
+        if random.random() < self.p:
+            return ImageOps.solarize(img)
+        else:
+            return img
+
+
+class gray_scale(object):
+    """
+    Apply Solarization to the PIL image.
+    """
+    def __init__(self, p=0.2):
+        self.p = p
+        self.transf = transforms.Grayscale(3)
+ 
+    def __call__(self, img):
+        if random.random() < self.p:
+            return self.transf(img)
+        else:
+            return img
+ 
+    
+class horizontal_flip(object):
+    """
+    Apply Solarization to the PIL image.
+    """
+    def __init__(self, p=0.2, activate_pred=False):
+        self.p = p
+        self.transf = transforms.RandomHorizontalFlip(p=1.0)
+ 
+    def __call__(self, img):
+        if random.random() < self.p:
+            return self.transf(img)
+        else:
+            return img
+        

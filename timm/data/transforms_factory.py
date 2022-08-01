@@ -10,7 +10,7 @@ from torchvision import transforms
 
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, DEFAULT_CROP_PCT
 from timm.data.auto_augment import rand_augment_transform, augment_and_mix_transform, auto_augment_transform
-from timm.data.transforms import str_to_interp_mode, str_to_pil_interp, RandomResizedCropAndInterpolation, ToNumpy
+from timm.data.transforms import str_to_interp_mode, str_to_pil_interp, RandomResizedCropAndInterpolation, ToNumpy, GaussianBlur, Solarization, gray_scale
 from timm.data.random_erasing import RandomErasing
 
 
@@ -164,6 +164,50 @@ def transforms_imagenet_eval(
     return transforms.Compose(tfl)
 
 
+def transforms_deit3(
+        img_size=224,
+        remove_random_resized_crop=True,
+        interpolation='bicubic',
+        color_jitter=0.3,
+        use_prefetcher=False,
+        mean=IMAGENET_DEFAULT_MEAN,
+        std=IMAGENET_DEFAULT_STD):
+
+    primary_tfl = []
+    scale=(0.08, 1.0)
+    if remove_random_resized_crop:
+        primary_tfl = [
+            transforms.Resize(img_size, interpolation=3),
+            transforms.RandomCrop(img_size, padding=4, padding_mode='reflect'),
+            transforms.RandomHorizontalFlip()
+        ]
+    else:
+        primary_tfl = [
+            RandomResizedCropAndInterpolation(
+                img_size, scale=scale, interpolation=interpolation),
+            transforms.RandomHorizontalFlip()
+        ]
+        
+    secondary_tfl = [transforms.RandomChoice([gray_scale(p=1.0),
+                                              Solarization(p=1.0),
+                                              GaussianBlur(p=1.0)])]
+    if color_jitter is not None and not color_jitter==0:
+        secondary_tfl.append(transforms.ColorJitter(color_jitter, color_jitter, color_jitter))
+
+    if use_prefetcher:
+        # prefetcher and collate will handle tensor conversion and norm
+        final_tfl = [ToNumpy()]
+    else:
+        final_tfl = [
+                transforms.ToTensor(),
+                transforms.Normalize(
+                    mean=torch.tensor(mean),
+                    std=torch.tensor(std))
+            ]
+
+    return transforms.Compose(primary_tfl + secondary_tfl + final_tfl)
+
+
 def create_transform(
         input_size,
         is_training=False,
@@ -184,7 +228,9 @@ def create_transform(
         re_num_splits=0,
         crop_pct=None,
         tf_preprocessing=False,
-        separate=False):
+        separate=False,
+        src=False,
+        use_3aug=False):
 
     if isinstance(input_size, (tuple, list)):
         img_size = input_size[-2:]
@@ -205,6 +251,16 @@ def create_transform(
                 use_prefetcher=use_prefetcher,
                 mean=mean,
                 std=std)
+        elif use_3aug:
+            transform = transforms_deit3(
+                img_size,
+                remove_random_resized_crop=src,
+                interpolation=interpolation,
+                color_jitter=color_jitter,
+                use_prefetcher=use_prefetcher,
+                mean=mean,
+                std=std
+            )
         elif is_training:
             transform = transforms_imagenet_train(
                 img_size,

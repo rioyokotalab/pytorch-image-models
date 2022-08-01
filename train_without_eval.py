@@ -222,6 +222,10 @@ parser.add_argument('--drop-block', type=float, default=None, metavar='PCT',
                     help='Drop block rate (default: None)')
 parser.add_argument('--repeated-aug', action='store_true',
                     help='Use repeated augmentation')
+parser.add_argument('--use-3aug', action='store_true',
+                    help='Use 3-Augment')
+parser.add_argument('--src', action='store_true',
+                    help='Use simple random crop')
 
 # Batch norm parameters (only works with gen_efficientnet based models currently)
 parser.add_argument('--bn-tf', action='store_true', default=False,
@@ -536,7 +540,9 @@ def main():
         collate_fn=collate_fn,
         pin_memory=args.pin_mem,
         use_multi_epochs_loader=args.use_multi_epochs_loader,
-        repeated_aug=args.repeated_aug
+        repeated_aug=args.repeated_aug,
+        src=args.src,
+        use_3aug=args.use_3aug
     )
 
     # setup learning rate schedule and starting epoch
