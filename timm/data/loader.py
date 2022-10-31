@@ -320,6 +320,8 @@ def create_transform_webdataset(
         persistent_workers=True,
         repeated_aug=False,
         split_fake=False,
+        src=False,
+        use_3aug=False
 ):
     re_num_splits = 0
     if re_split:
@@ -346,6 +348,8 @@ def create_transform_webdataset(
         re_count=re_count,
         re_num_splits=re_num_splits,
         separate=num_aug_splits > 0,
+        src=src,
+        use_3aug=use_3aug
     )
 
 

@@ -250,6 +250,10 @@ parser.add_argument('--drop-block', type=float, default=None, metavar='PCT',
                     help='Drop block rate (default: None)')
 parser.add_argument('--repeated-aug', action='store_true',
                     help='Use repeated augmentation')
+parser.add_argument('--use-3aug', action='store_true',
+                    help='Use 3-Augment')
+parser.add_argument('--src', action='store_true',
+                    help='Use simple random crop')
 
 # Batch norm parameters (only works with gen_efficientnet based models currently)
 parser.add_argument('--bn-tf', action='store_true', default=False,
@@ -573,7 +577,9 @@ def main():
             collate_fn=collate_fn,
             pin_memory=args.pin_mem,
             use_multi_epochs_loader=args.use_multi_epochs_loader,
-            repeated_aug=args.repeated_aug
+            repeated_aug=args.repeated_aug,
+            src=args.src,
+            use_3aug=args.use_3aug
         )
 
         # transform_train = transforms.Compose([
@@ -912,6 +918,7 @@ def train_one_epoch(
         if args.channels_last:
             input = input.contiguous(memory_format=torch.channels_last)
 
+        # torch.autograd.set_detect_anomaly(True)
         with amp_autocast():
             output = model(input)
             loss = loss_fn(output, target)
@@ -929,6 +936,25 @@ def train_one_epoch(
                 clip_grad=args.clip_grad, clip_mode=args.clip_mode,
                 parameters=model_parameters(model, exclude_head='agc' in args.clip_mode),
                 create_graph=second_order)
+
+            # print grad check
+            # import numpy as np
+            # import math
+            # v_n = []
+            # v_v = []
+            # v_g = []
+            # for name, parameter in model.named_parameters():
+            #     v_n.append(name)
+            #     v_v.append(parameter.detach().cpu().numpy() if parameter is not None else [0])
+            #     v_g.append(parameter.grad.detach().cpu().numpy() if parameter.grad is not None else [0])
+            # for i in range(len(v_n)):
+            #     # if not math.isfinite(np.min(v_v[i]).item()):
+            #     #     print('%d rank %d  value %s: %.3e ~ %.3e' % (batch_idx, args.rank, v_n[i], np.min(v_v[i]).item(), np.max(v_v[i]).item()))
+            #     if not math.isfinite(np.min(v_g[i]).item()) and args.rank == 0:
+            #         # print('%d rank %d  grad  %s' % (batch_idx, args.rank, v_n[i]))
+            #         # print(v_g[i])
+            #         print('%d rank %d  grad  %s: %.3e ~ %.3e' % (batch_idx, args.rank, v_n[i], np.min(v_g[i]).item(), np.max(v_g[i]).item()))
+
         else:
             loss.backward(create_graph=second_order)
             if args.clip_grad is not None:
