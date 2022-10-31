@@ -4,6 +4,7 @@ output/
 wandb/
 make_shard.py
 read_data.py
+deepspeed_example/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

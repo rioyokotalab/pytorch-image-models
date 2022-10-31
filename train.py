@@ -744,10 +744,11 @@ def main():
                 best_metric, best_epoch = saver.save_checkpoint(epoch, metric=save_metric)
                 if (args.hold_epochs is not None and epoch in args.hold_epochs) or (args.hold_epochs_interval is not None and (epoch+1) % args.hold_epochs_interval == 0):
                     if args.output:
-                        checkpoint_file = f'{args.output}/{args.experiment}/checkpoint-{epoch}.pth.tar'
+                        # if copy from checkpoint-{epoch}.pth.tar, error may occured because of file deletion due to poor metrics
+                        checkpoint_file = f'{args.output}/{args.experiment}/last.pth.tar'
                         target_file = f'{args.output}/{args.experiment}/held-checkpoint-{epoch}.pth.tar'
                     else:
-                        checkpoint_file = f'output/train/{args.experiment}/checkpoint-{epoch}.pth.tar'
+                        checkpoint_file = f'output/train/{args.experiment}/last.pth.tar'
                         target_file = f'output/train/{args.experiment}/held-checkpoint-{epoch}.pth.tar'
                     shutil.copyfile(checkpoint_file, target_file)
 
