@@ -38,6 +38,7 @@ from timm.models import create_model, safe_model_name, resume_checkpoint, load_c
 from timm.optim import create_optimizer_v2, optimizer_kwargs
 from timm.scheduler import create_scheduler
 from timm.utils import ApexScaler, NativeScaler
+from timm.utils.model import unwrap_model
 
 try:
     from apex import amp
@@ -515,6 +516,11 @@ def main():
         if args.rank == 0:
             _logger.info('AMP not enabled. Training in float32.')
 
+    arch_optimizer = None
+    if args.model == 'auto_metaformer_async':
+        from timm.optim.arch_optim import Architect
+        arch_lr = 3e-4 * ((args.batch_size * args.world_size) // 64) # scaling learning rate
+        arch_optimizer = Architect(model, arch_lr, 1e-3, args.momentum, args.weight_decay)
 
     # optionally resume from a checkpoint
     resume_epoch = None
@@ -546,6 +552,11 @@ def main():
                 _logger.info("Using native Torch DistributedDataParallel.")
             model = NativeDDP(model, device_ids=[args.local_rank], broadcast_buffers=not args.no_ddp_bb, find_unused_parameters=False)
         # NOTE: EMA model does not need to be wrapped by DDP
+
+        # broadcast the init weight for architecutre parameters
+        if args.model == 'auto_metaformer_async':
+            for param in unwrap_model(model).arch_params:
+                torch.distributed.broadcast(param, 0, async_op=False)
 
     # if needed, load dataset from torch
     if args.dataset == 'CIFAR10':
@@ -632,6 +643,7 @@ def main():
         distributed=args.distributed,
         crop_pct=data_config['crop_pct'],
         pin_memory=args.pin_mem,
+        random_sample_valid=True if args.model == 'auto_metaformer_async' else False,
     )
 
     # setup learning rate schedule and starting epoch
@@ -709,11 +721,19 @@ def main():
             if args.distributed and hasattr(loader_train.sampler, 'set_epoch'):
                 loader_train.sampler.set_epoch(epoch)
 
-            train_metrics = train_one_epoch(
-                epoch, model, loader_train, optimizer, train_loss_fn, args,
-                lr_scheduler=lr_scheduler, saver=saver, output_dir=output_dir,
-                amp_autocast=amp_autocast, loss_scaler=loss_scaler, model_ema=model_ema, mixup_fn=mixup_fn,
-                update_iter=update_iter)
+            if args.model == 'auto_metaformer_async':
+                train_metrics = train_one_epoch(
+                    epoch, model, loader_train, optimizer, train_loss_fn, args,
+                    lr_scheduler=lr_scheduler, saver=saver, output_dir=output_dir,
+                    amp_autocast=amp_autocast, loss_scaler=loss_scaler, model_ema=model_ema, mixup_fn=mixup_fn,
+                    update_iter=update_iter,
+                    arch_optimizer=arch_optimizer, valid_loader=loader_eval, valid_loss_fn=validate_loss_fn)
+            else:
+                train_metrics = train_one_epoch(
+                    epoch, model, loader_train, optimizer, train_loss_fn, args,
+                    lr_scheduler=lr_scheduler, saver=saver, output_dir=output_dir,
+                    amp_autocast=amp_autocast, loss_scaler=loss_scaler, model_ema=model_ema, mixup_fn=mixup_fn,
+                    update_iter=update_iter)
 
             if args.distributed and args.dist_bn in ('broadcast', 'reduce'):
                 if args.rank == 0:
@@ -737,6 +757,9 @@ def main():
                 utils.update_summary(
                     epoch, train_metrics, eval_metrics, os.path.join(output_dir, 'summary.csv'),
                     write_header=best_metric is None, log_wandb=args.log_wandb and has_wandb)
+            
+            if args.log_wandb and args.rank == 0 and 'auto_metaformer' in args.model:
+                wandb.log({'epoch': epoch, 'arch_params': unwrap_model(model).arch_params})
 
             if saver is not None:
                 # save proper checkpoint with eval metric
@@ -753,19 +776,24 @@ def main():
                     shutil.copyfile(checkpoint_file, target_file)
 
             if args.pause is not None:
-                if epoch - start_epoch >= args.pause:
+                if epoch >= args.pause:
                     break
 
     except KeyboardInterrupt:
         pass
     if best_metric is not None:
         _logger.info('*** Best metric: {0} (epoch {1})'.format(best_metric, best_epoch))
+    if 'auto_metaformer' in args.model:
+        arch_params = unwrap_model(model).arch_params
+        for param in arch_params:
+            _logger.info(param)
 
 
 def train_one_epoch(
         epoch, model, loader, optimizer, loss_fn, args,
         lr_scheduler=None, saver=None, output_dir=None, amp_autocast=suppress,
-        loss_scaler=None, model_ema=None, mixup_fn=None, update_iter=None):
+        loss_scaler=None, model_ema=None, mixup_fn=None, update_iter=None,
+        arch_optimizer=None, valid_loader=None, valid_loss_fn=None):
 
     if args.mixup_off_epoch and epoch >= args.mixup_off_epoch:
         if args.prefetcher and loader.mixup_enabled:
@@ -795,6 +823,21 @@ def train_one_epoch(
                 input, target = mixup_fn(input, target)
         if args.channels_last:
             input = input.contiguous(memory_format=torch.channels_last)
+
+        if arch_optimizer is not None:
+            # TBD: valid_loader random sampling
+            input_search, target_search = next(iter(valid_loader))
+            input_search = input_search.cuda()
+            target_search = target_search.cuda()
+            lrl = [param_group['lr'] for param_group in optimizer.param_groups]
+            lr = sum(lrl) / len(lrl)
+
+            arch_optimizer.step(input, target, input_search, target_search, lr, optimizer, 
+                                loss_fn=valid_loss_fn, unrolled=False) # set unrolled to False to use first order derivative
+                                # second order derivative not implemented yet
+
+        # if batch_idx % args.log_interval == 0 and 'auto_metaformer' in args.model:
+        #     _logger.info(f'after arch rank {args.rank} {unwrap_model(model).arch_params[0]}')
 
         with amp_autocast():
             output = model(input)
@@ -834,6 +877,9 @@ def train_one_epoch(
             if args.distributed:
                 reduced_loss = utils.reduce_tensor(loss.data, args.world_size)
                 losses_m.update(reduced_loss.item(), input.size(0))
+
+            if 'auto_metaformer' in args.model and args.rank == 0:
+                _logger.info(f'{unwrap_model(model).arch_params[0]}')
 
             if args.rank == 0:
                 _logger.info(

@@ -87,6 +87,11 @@ def resume_checkpoint(model, checkpoint_path, optimizer=None, loss_scaler=None, 
             state_dict = clean_state_dict(checkpoint['state_dict'])
             model.load_state_dict(state_dict)
 
+            if 'arch_dict' in checkpoint:
+                if log_info:
+                    _logger.info('Restoring architecture state from checkpoint...')
+                model.load_arch_params(checkpoint['arch_dict'])
+
             if optimizer is not None and 'optimizer' in checkpoint:
                 if log_info:
                     _logger.info('Restoring optimizer state from checkpoint...')

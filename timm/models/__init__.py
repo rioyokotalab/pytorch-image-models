@@ -60,6 +60,7 @@ from .xcit import *
 from .twins import *
 from .autoformer import *
 from .deit3 import *
+from .autometaformer import *
 
 from .factory import create_model, parse_model_name, safe_model_name
 from .helpers import load_checkpoint, resume_checkpoint, model_parameters, resume_checkpoint_with_iter, resolve_pretrained_cfg

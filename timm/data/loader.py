@@ -199,6 +199,7 @@ def create_loader(
         worker_seeding='all',
         src=False,
         use_3aug=False,
+        random_sample_valid=False,
 ):
     re_num_splits = 0
     if re_split:
@@ -226,7 +227,7 @@ def create_loader(
         re_num_splits=re_num_splits,
         separate=num_aug_splits > 0,
         src=src,
-        use_3aug=use_3aug
+        use_3aug=use_3aug,
     )
 
     sampler = None
@@ -242,9 +243,12 @@ def create_loader(
             else:
                 sampler = torch.utils.data.distributed.DistributedSampler(dataset)
         else:
-            # This will add extra duplicate entries to result in equal num
-            # of samples per-process, will slightly alter validation results
-            sampler = OrderedDistributedSampler(dataset)
+            if random_sample_valid:
+                sampler = torch.utils.data.distributed.DistributedSampler(dataset)
+            else:
+                # This will add extra duplicate entries to result in equal num
+                # of samples per-process, will slightly alter validation results
+                sampler = OrderedDistributedSampler(dataset)
     else:
         assert num_aug_repeats == 0, "RepeatAugment not currently supported in non-distributed or IterableDataset use"
 

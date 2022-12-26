@@ -112,6 +112,8 @@ class CheckpointSaver:
             save_state['state_dict_ema'] = get_state_dict(self.model_ema, self.unwrap_fn)
         if metric is not None:
             save_state['metric'] = metric
+        if self.args.model == 'auto_metaformer_async':
+            save_state['arch_dict'] = self.unwrap_fn(self.model).arch_params
         torch.save(save_state, save_path)
 
     def _cleanup_checkpoints(self, trim=0):
